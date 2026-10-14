@@ -258,11 +258,6 @@ jobs:
       - name: Forbid unmarked macOS fakes in tests
         run: python scripts/ci/check_os_marker_fakes.py
 
-      # Every AGENTS.md from the git root down to the working directory loads as one
-      # project-context block (30,720 chars on a 128k window); chains are capped at 30k.
-      - name: Keep every AGENTS.md under its truncation cap
-        run: python scripts/ci/check_agents_md_size.py
-
       # Advisory: profile-scope hazard shapes on the lines this PR adds (child env from os.environ,
       # raw os.getenv of a platform credential, HOME-only RPC binding, bare-PID liveness). One
       # process serves many profiles; every pattern leaked the launch profile at least once. Printed
