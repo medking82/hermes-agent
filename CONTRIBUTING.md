@@ -313,7 +313,6 @@ hermes-agent/
 ├── website/                  # Documentation site (hermes-agent.nousresearch.com)
 │
 ├── cli-config.yaml.example   # Example configuration (copied to ~/.hermes/config.yaml)
-└── AGENTS.md                 # Development guide for AI coding assistants
 ```
 
 ### User configuration (stored in `~/.hermes/`)
@@ -436,9 +435,6 @@ You must still add the tool name to the appropriate list in `toolsets.py`
 (for example `_HERMES_CORE_TOOLS` or a dedicated toolset); otherwise the tool
 registers but is never exposed to the agent. If you introduce a new toolset,
 add it in `toolsets.py` and wire it into the relevant platform presets.
-
-See `AGENTS.md` (section **Adding New Tools**) for profile-aware paths and
-plugin vs core guidance.
 
 ---
 
@@ -886,7 +882,6 @@ def test_native_windows_arm64_behavior():
 For several supported hosts, use one marker with multiple arguments, such as
 `@pytest.mark.platforms("linux", "macos")`. Do not stack host markers.
 Tests of pure functions that accept a platform as data need no host marker.
-See [AGENTS.md](AGENTS.md#dont-fake-the-host-os) for the complete contract.
 
 ---
 

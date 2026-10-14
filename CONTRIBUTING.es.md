@@ -182,7 +182,6 @@ hermes-agent/
 ├── website/                  # Sitio de documentación (hermes-agent.nousresearch.com)
 │
 ├── cli-config.yaml.example   # Configuración de ejemplo (copiada a ~/.hermes/config.yaml)
-└── AGENTS.md                 # Guía de desarrollo para asistentes de codificación IA
 ```
 
 ### Configuración del usuario (almacenada en `~/.hermes/`)
@@ -299,8 +298,7 @@ Todavía debes añadir el nombre de la herramienta a la lista apropiada en `tool
 (por ejemplo `_HERMES_CORE_TOOLS` o un toolset dedicado); de lo contrario la herramienta
 se registra pero nunca se expone al agente.
 
-Consulta `AGENTS.md` (sección **Adding New Tools**) para rutas conscientes del perfil y
-orientación sobre plugins vs. núcleo.
+
 
 ---
 
