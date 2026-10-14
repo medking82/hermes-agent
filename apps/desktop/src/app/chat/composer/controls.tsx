@@ -152,7 +152,7 @@ export function ComposerControls({
             showStop ? (
               <TipKeybindLabel actionId="composer.send" text={c.stop} />
             ) : (
-              <TipKeybindLabel actionId="composer.send" text={c.send} />
+              <TipKeybindLabel actionId={busy && !cardWaiting ? 'composer.steer' : 'composer.send'} text={c.send} />
             )
           }
           placement="control"

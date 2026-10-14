@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button'
 import { Slot as ContribSlot } from '@/contrib/react/slot'
 import { useI18n } from '@/i18n'
 import { chatMessageText } from '@/lib/chat-messages'
+import { isSlashCommandText } from '@/lib/chat-runtime'
 import { sanitizeComposerInput } from '@/lib/composer-input-sanitize'
 import { DATA_IMAGE_URL_RE } from '@/lib/embedded-images'
 import { triggerHaptic } from '@/lib/haptics'
@@ -946,27 +947,6 @@ export function ChatBar({
       return
     }
 
-    // Cmd/Ctrl+Enter queues a follow-up while a turn runs. Plain Enter steers
-    // a text-only draft, so both live-turn actions stay reachable by keyboard.
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
-      event.preventDefault()
-
-      if (busy && !disabled) {
-        // As with plain Enter, source the just-typed content from the DOM so a
-        // fast keypress cannot queue a stale draft.
-        const editorText = liveComposerDraft(editorRef.current, draftRef.current)
-
-        if (editorText !== draftRef.current) {
-          draftRef.current = editorText
-          setComposerText(editorText)
-        }
-
-        queueDraft()
-      }
-
-      return
-    }
-
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
 
@@ -979,7 +959,28 @@ export function ChatBar({
       const editorText = liveComposerDraft(editorRef.current, draftRef.current)
       const hasLivePayload = editorText.trim().length > 0 || attachments.length > 0
 
-      if (disabled) {
+      if (disabled || (!busy && (event.metaKey || event.ctrlKey))) {
+        return
+      }
+
+      // Plain Enter queues while busy; Cmd/Ctrl+Enter retains the immediate
+      // submit/steer path. Cards, commands and queue edits keep their meaning.
+      if (
+        busy &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !cardWaiting &&
+        !queueEdit &&
+        !isSlashCommandText(editorText)
+      ) {
+        if (editorText !== draftRef.current) {
+          draftRef.current = editorText
+          setComposerText(editorText)
+        }
+
+        queueDraft()
+
         return
       }
 
@@ -989,8 +990,8 @@ export function ChatBar({
         return
       }
 
-      // Empty Enter while busy. With prompts queued this is the double-send:
-      // the first Enter put the words in the queue, a second delivers them
+      // Empty Cmd/Ctrl+Enter while busy explicitly delivers the queue head:
+      // plain Enter put the words in the queue, the modified chord delivers them
       // now — steered into the live turn when a steer can carry them, else
       // promote + interrupt + drain on settle — mirroring the idle empty-Enter
       // drain above. With nothing queued it stays a no-op — interrupting is

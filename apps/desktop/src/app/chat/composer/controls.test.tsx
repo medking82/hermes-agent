@@ -52,8 +52,7 @@ async function expectShortcutTooltip(label: string, shortcut: string) {
 
   const tooltip = await screen.findByRole('tooltip')
 
-  expect(tooltip.textContent).toContain(label)
-  expect(tooltip.textContent).toContain(shortcut)
+  expect(tooltip.textContent).toBe(label + shortcut)
 }
 
 afterEach(() => {
@@ -141,10 +140,10 @@ describe('narrow tiles', () => {
 })
 
 describe('ComposerControls shortcut tooltips', () => {
-  it('keeps Send (not Steer) while a turn is running if there is a payload', async () => {
+  it('shows Ctrl+Enter on the immediate Send action while a turn is running', async () => {
     renderControls({ busy: true, busyAction: 'steer' })
 
-    await expectShortcutTooltip('Send', '↵')
+    await expectShortcutTooltip('Send', 'Ctrl+↵')
   })
 
   it('shows Stop only when the composer is empty mid-turn', async () => {
@@ -167,10 +166,10 @@ describe('ComposerControls shortcut tooltips', () => {
     expect(screen.getByLabelText('Stop').hasAttribute('disabled')).toBe(false)
   })
 
-  it('shows Ctrl+Enter for Queue as the secondary mid-turn action', async () => {
+  it('shows plain Enter for Queue while a turn is running', async () => {
     renderControls({ busy: true, busyAction: 'queue' })
 
-    await expectShortcutTooltip('Queue message', 'Ctrl+↵')
+    await expectShortcutTooltip('Queue message', '↵')
   })
 
   it('hides Queue while idle even if the composer has a payload', () => {
