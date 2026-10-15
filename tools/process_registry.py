@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Literal, NamedTuple, Optional
 
 from hermes_cli.config import get_hermes_home
 
-from tools.process_registry_notifications import format_process_notification, is_child_process_notification, should_surface_notification
+from tools.process_registry_notifications import format_process_notification, is_child_process_notification, should_surface_notification, stale_heartbeat
 from tools.process_registry_checkpoint import ProcessCheckpointMixin
 from tools.process_registry_heartbeat import ProcessHeartbeatMixin
 from tools.process_registry_output_log import ProcessOutputLogMixin, open_output_log, record_exit_command, worker_output_log
@@ -1830,10 +1830,9 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
                         "type=%s session_id=%s task_id=%s",
                         evt.get("type", "completion"), _evt_sid, _evt_task_id)
                     continue
-            if self.heartbeat_is_stale(evt):
+            if stale_heartbeat(evt, self):
                 continue
             if text := format_process_notification(evt):
-                self.note_heartbeat_delivered(evt)
                 results.append((evt, text))
         for evt in requeue:
             self.completion_queue.put(evt)

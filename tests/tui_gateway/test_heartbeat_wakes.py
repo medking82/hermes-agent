@@ -89,3 +89,30 @@ def test_the_poller_drops_a_beat_whose_process_already_exited(surface):
     assert server._notif_handle_event("sid", session, dict(HEARTBEAT, session_id="proc_live"), set(),
                                       registry, lambda e: "t", []) is True
     assert [kw["display_kind"] for _, kw in surface] == ["hidden"], "a running beat still wakes"
+
+
+def test_a_beat_drained_mid_turn_still_wakes_once_through_the_safety_net(surface, monkeypatch):
+    """The post-turn safety net drains the queue and feeds those same events to the poller's own
+    handler (``prompt_turn`` → ``_notif_handle_ready``). A drain that recorded the beat as delivered
+    would make that second consumer drop it as superseded before any model saw it — the wake a live
+    process's output earned would be swallowed. Recording belongs to the consumer that commits the
+    turn."""
+    from tools.process_registry import ProcessRegistry, ProcessSession
+
+    monkeypatch.setattr(server, "_run_prompt_submit",
+                        lambda rid, sid, session, text, **kw: (surface.append((text, kw)), True)[1])
+    registry = ProcessRegistry()
+    live = ProcessSession(id="proc_hb", command="npm test", notify_on_complete=True)
+    registry._running[live.id] = live
+    registry.completion_queue.put(dict(HEARTBEAT))
+    session = _session()
+
+    drained = registry.drain_notifications(session_key="", owns_event=lambda e: True)
+    assert [e["seq"] for e, _ in drained] == [2], "the drain hands over the live beat"
+
+    server._notif_handle_ready("sid", session, [event for event, _ in drained], set(), registry,
+                               lambda e: "t", [], owned=True)
+
+    assert [kw["display_kind"] for _, kw in surface] == ["hidden"], "the safety net still wakes once"
+    assert registry.heartbeat_is_stale(dict(HEARTBEAT)) is True, "the delivering consumer records it"
+    assert registry.heartbeat_is_stale(dict(HEARTBEAT, seq=1)) is True, "an older beat stays out of order"

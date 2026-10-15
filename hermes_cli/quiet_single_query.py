@@ -206,6 +206,7 @@ def continue_quiet_notify_completions(
     budget handshake below).
     """
     from tools.process_registry import process_registry
+    from tools.process_registry_notifications import note_heartbeat_delivered
     from tools.async_delegation import claim_event_delivery, complete_event_delivery
 
     last: Any = None
@@ -233,6 +234,10 @@ def continue_quiet_notify_completions(
         texts = [text for _event, text in drained if text]
         if texts:
             follow = run_turn("\n\n".join(texts))
+            # The turn above is the delivery: a beat may only be recorded once it happened.
+            for event, text in drained:
+                if text:
+                    note_heartbeat_delivered(event, process_registry)
             # Same admission rule as the interactive CLI turn: a wake made ONLY of automatic
             # diagnostics (early failure / watch notices) still runs, but under suppression its
             # reply never displaces the requested one-shot answer on stdout.

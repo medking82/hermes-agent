@@ -332,14 +332,17 @@ async def test_post_turn_watch_drain_drops_a_beat_from_an_exited_process(monkeyp
 
     runner = _build_runner(monkeypatch, tmp_path, "all")
     adapter = runner.adapters[Platform.TELEGRAM]
-    completion_queue = queue.Queue()
-    completion_queue.put({"type": "heartbeat", "session_id": "proc_dead", "seq": 2, "elapsed": 120.0,
-                          "interval": 60, "command": "npm test", "output": "1 failing\n"})
     registry = process_registry_module.ProcessRegistry()
     dead = process_registry_module.ProcessSession(id="proc_dead", command="npm test", notify_on_complete=True)
     dead.mark_exited(1)
     registry._finished[dead.id] = dead
     monkeypatch.setattr(process_registry_module, "process_registry", registry)
+    # The queue the runner drains IS the one that registry owns (the gateway passes
+    # ``process_registry.completion_queue`` at every call site) — a separate queue would test a
+    # pairing production never builds.
+    completion_queue = registry.completion_queue
+    completion_queue.put({"type": "heartbeat", "session_id": "proc_dead", "seq": 2, "elapsed": 120.0,
+                          "interval": 60, "command": "npm test", "output": "1 failing\n"})
 
     await runner._drain_watch_notifications(completion_queue)
 

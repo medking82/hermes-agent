@@ -188,18 +188,23 @@ def test_a_heartbeat_queued_before_exit_never_wakes_after_it():
 
 
 def test_a_superseded_heartbeat_never_arrives_after_a_newer_one():
-    """A busy owner re-queues the beat it cannot deliver at the tail of the queue, so an older
-    beat can land behind a newer one. The newer beat already carried the newer output; dropping
-    the stale one keeps one wake per useful update and the delivery order monotonic."""
+    """A busy owner re-queues the beat it could not deliver at the tail of the queue, so it can come
+    back behind a newer beat that landed meanwhile. Dropping it then keeps the delivery order
+    monotonic — the owner already has newer output — while a beat nothing newer was delivered for
+    still goes through, and the record is written by the consumer that delivered it, not by the
+    drain."""
     registry = ProcessRegistry()
     session = pr.ProcessSession(id="proc_hb", command="npm test", notify_on_complete=True)
     registry._running[session.id] = session
     base = {"type": "heartbeat", "session_id": session.id, "command": "npm test", "interval": 60}
 
-    for seq in (2, 1):  # the re-queued shape: seq 1 came back behind seq 2
-        registry.completion_queue.put({**base, "seq": seq, "elapsed": seq * 60.0, "output": f"line {seq}\n"})
-
+    # The re-queued shape: seq 1 could not be delivered, so seq 2 arrived first and was delivered.
+    registry.completion_queue.put({**base, "seq": 2, "elapsed": 120.0, "output": "line 2\n"})
     assert [e["seq"] for e, _ in registry.drain_notifications()] == [2]
+    registry.note_heartbeat_delivered({**base, "seq": 2})
+
+    registry.completion_queue.put({**base, "seq": 1, "elapsed": 60.0, "output": "line 1\n"})
+    assert registry.drain_notifications() == [], "the superseded beat never comes back"
 
 
 def test_an_exited_process_still_delivers_its_completion_notice():
@@ -213,3 +218,60 @@ def test_an_exited_process_still_delivers_its_completion_notice():
                                    "exit_code": 1, "output": "1 failing\n", "started_at": session.started_at})
 
     assert [e["type"] for e, _ in registry.drain_notifications()] == ["completion"]
+
+
+def test_draining_a_beat_does_not_count_as_delivering_it():
+    """Draining is not delivery. The TUI post-turn safety net drains the queue and then hands the
+    very same events to the poller's own handler, so recording the beat while draining would make
+    that second consumer drop it as superseded and no model would ever see the wake. Only the
+    consumer that commits the turn records it."""
+    registry = ProcessRegistry()
+    session = pr.ProcessSession(id="proc_hb", command="npm test", notify_on_complete=True)
+    registry._running[session.id] = session
+    registry.completion_queue.put({"type": "heartbeat", "session_id": session.id, "seq": 3,
+                                   "elapsed": 180.0, "interval": 60, "output": "line 3\n"})
+
+    assert [e["seq"] for e, _ in registry.drain_notifications()] == [3]
+    assert registry.heartbeat_is_stale({"type": "heartbeat", "session_id": session.id, "seq": 3}) is False
+
+    registry.note_heartbeat_delivered({"type": "heartbeat", "session_id": session.id, "seq": 3})
+    assert registry.heartbeat_is_stale({"type": "heartbeat", "session_id": session.id, "seq": 3}) is True
+    assert registry.heartbeat_is_stale({"type": "heartbeat", "session_id": session.id, "seq": 1}) is True
+
+
+def test_a_beat_without_a_real_sequence_is_delivered_even_after_an_exit():
+    """Fail-open covers the payload, not just the lookup: a beat whose sequence is not a plain int
+    (a replayed or hand-made event) is delivered whatever the process state, because the guard may
+    only drop what it can actually judge."""
+    registry = ProcessRegistry()
+    session = pr.ProcessSession(id="proc_hb", command="npm test", notify_on_complete=True)
+    session.mark_exited(1)
+    registry._finished[session.id] = session
+
+    for bad_seq in ("3", None, True):
+        assert registry.heartbeat_is_stale({"type": "heartbeat", "session_id": session.id, "seq": bad_seq}) is False
+
+
+def test_a_failing_check_never_costs_a_queued_beat(monkeypatch):
+    """The consumer-facing helper is the guard the drain loops use: a check that explodes (a future
+    registry shape, a corrupted event) must deliver the beat it was already popped for, not abort
+    the drain and lose it."""
+    from tools.process_registry_notifications import note_heartbeat_delivered, stale_heartbeat
+    from types import SimpleNamespace
+
+    beat = {"type": "heartbeat", "session_id": "proc_hb", "seq": 1, "elapsed": 60.0,
+            "interval": 60, "command": "npm test", "output": "line 1\n"}
+    registry = ProcessRegistry()
+    registry.completion_queue.put(dict(beat))
+    monkeypatch.setattr(registry, "heartbeat_is_stale", lambda evt: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    assert [e["seq"] for e, _ in registry.drain_notifications()] == [1]
+
+    def _explode(*_a):
+        raise RuntimeError("boom")
+
+    duck = SimpleNamespace(heartbeat_is_stale=_explode, note_heartbeat_delivered=_explode)
+    assert stale_heartbeat(beat, SimpleNamespace()) is False, "no check at all delivers"
+    assert stale_heartbeat(beat, duck) is False, "a check that raises delivers"
+    assert stale_heartbeat({"type": "completion", "session_id": "proc_hb"}, duck) is False
+    note_heartbeat_delivered(beat, duck)  # must not raise out of a delivery path

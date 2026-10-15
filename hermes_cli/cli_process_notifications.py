@@ -45,7 +45,7 @@ class CLIProcessNotificationsMixin:
         from tools.async_delegation import claim_event_delivery, complete_event_delivery
         from tools.process_registry_notifications import (
             HEARTBEAT_DISPLAY_KIND, ProcessNotificationBatch, TimelineNotification, group_process_notifications,
-            heartbeat_display_text)
+            heartbeat_display_text, note_heartbeat_delivered)
 
         claimed = []
         for event, text in process_registry.drain_notifications(
@@ -72,6 +72,8 @@ class CLIProcessNotificationsMixin:
                 if diagnostic_process_event(event) and not isinstance(pending, TimelineNotification):
                     pending = TimelineNotification(text, text, "internal_notification", "diagnostic")
             self._pending_input.put(pending)
+            # The wake is committed here: draining is not delivery (see note_heartbeat_delivered).
+            note_heartbeat_delivered(event, process_registry)
 
     def _tui_unwrap_input(self, user_input):
         """Unwrap ``_VoiceInputMessage`` / ``_SeededQueryMessage`` -> ``(text_or_tuple, is_voice_input, is_seeded_query)``."""

@@ -42,9 +42,9 @@ class ProcessHeartbeatMixin:
     def _heartbeat_loop(self) -> None:
         """One daemon thread for every heartbeat session: reader threads block on the pipe and
         cannot keep time, and a per-process timer would leak one thread per job."""
-        from tools.process_registry import HEARTBEAT_TICK_SECONDS
-
         while True:
+            from tools.process_registry import HEARTBEAT_TICK_SECONDS  # per tick: tests retune it live
+
             time.sleep(HEARTBEAT_TICK_SECONDS)
             now = time.time()
             with self._lock:
@@ -84,7 +84,12 @@ class ProcessHeartbeatMixin:
         self.completion_queue.put(notification)
 
     def _heartbeat_session(self, evt: dict) -> Optional["ProcessSession"]:
-        """The session a ``heartbeat`` event belongs to, or None when this process doesn't own it."""
+        """The session a ``heartbeat`` event belongs to, or None when this process doesn't own it.
+
+        Takes ``self._lock``: callers must never hold it already (the drain loops run unlocked). A
+        session evicted from ``_finished`` after a long stay on the queue resolves to None, which
+        delivers the beat — the fail-open direction, never a swallowed wake.
+        """
         session_id = str(evt.get("session_id") or "")
         if not session_id:
             return None
@@ -95,30 +100,42 @@ class ProcessHeartbeatMixin:
         """True when a queued ``heartbeat`` may not wake its owner any more.
 
         A beat says "still running — here is the new output", so it stops being true the moment
-        its process exits: the completion notice carries the final state and ``process log`` holds
-        the output, and a wake after the fact reads as a live job that must be answered. A beat at
-        or below the highest sequence already delivered was re-queued behind a newer one (the
-        delivery loop puts an undeliverable event back at the tail), so it would arrive out of
-        order with older output than the owner already has. Both are dropped; anything else —
-        a running process, another type, an unknown owner, an unreadable sequence — is delivered,
-        because notification hygiene must never silently swallow a wake.
+        its process exits: the completion notice is the state, and ``process log`` still holds the
+        output a dropped beat carried (a beat is a disposable progress sample, never the durable
+        record). A beat below the highest sequence a consumer already delivered was re-queued
+        behind a newer one (the delivery loops put an undeliverable event back at the tail), so it
+        would arrive with older output than the owner already has. Both are dropped; everything
+        else — a running process, another type, an unknown owner, a sequence that is not a plain
+        ``int`` — is delivered, because notification hygiene must never silently swallow a wake.
+        The recorded sequence orders deliveries only: a beat may be delivered twice, never dropped.
         """
         if evt.get("type") != "heartbeat":
+            return False
+        seq = evt.get("seq")
+        if type(seq) is not int:
             return False
         session = self._heartbeat_session(evt)
         if session is None:
             return False
         if session.exited:
             return True
-        seq = evt.get("seq")
-        if not isinstance(seq, int):
-            return False
         return seq <= session._heartbeat_delivered_seq
 
     def note_heartbeat_delivered(self, evt: dict) -> None:
-        """Record the highest heartbeat sequence handed to a consumer (see heartbeat_is_stale)."""
+        """Record the highest heartbeat sequence a consumer actually delivered (``heartbeat_is_stale``).
+
+        Called where the wake is committed to a turn — never while draining the queue: a drained
+        event is often handed to a second consumer (the TUI post-turn safety net routes its drain
+        through the poller's own handler), and recording it here would make that consumer drop the
+        beat as superseded before any model ever saw it.
+
+        Best-effort ordering, not a lock: the delivery is an agent turn that starts after the check
+        returns, so no lock could span it. Two consumers racing may both deliver the same beat (a
+        duplicate, the safe direction); a plain attribute store keeps the recorded sequence from
+        ever regressing below a sequence already delivered.
+        """
         seq = evt.get("seq")
-        if evt.get("type") != "heartbeat" or not isinstance(seq, int):
+        if evt.get("type") != "heartbeat" or type(seq) is not int:
             return
         session = self._heartbeat_session(evt)
         if session is not None:

@@ -498,8 +498,13 @@ def _background_notifications_off(session: dict) -> bool:
     return raw is False or str(raw or "").strip().lower() == "off"
 
 
-def _notif_dispatch_event(sid: str, session: dict, evt: dict, text: str) -> None:
-    """Run the claimed (running=True) agent turn for one notification event."""
+def _notif_dispatch_event(sid: str, session: dict, evt: dict, text: str) -> bool:
+    """Run the claimed (running=True) agent turn for one notification event.
+
+    True only when the turn was actually submitted: the caller records a heartbeat delivery on that
+    answer, and recording a beat that was deferred instead would let the deferral's own retry be
+    dropped as superseded.
+    """
     from tools.async_delegation import claim_event_delivery, complete_event_delivery, release_event_delivery
     try:
         claim = claim_event_delivery(evt, "tui-poller")
@@ -511,7 +516,7 @@ def _notif_dispatch_event(sid: str, session: dict, evt: dict, text: str) -> None
         # the target. No turn will run, and nothing else clears ``running``: a busy session is exempt
         # from the reaper, keeps its lease, and never reaches its bot mailbox again.
         _notif_release_turn(session)
-        return
+        return False
     evt_type = evt.get("type")
     kwargs: dict = {}
     if evt_type == "async_delegation":
@@ -529,11 +534,12 @@ def _notif_dispatch_event(sid: str, session: dict, evt: dict, text: str) -> None
         if not _notif_submit(f"__notif__{int(time.time() * 1000)}", sid, session, text,
                              "notification poller dispatch failed", **kwargs):
             _notif_defer_event(evt, claim)
-            return
+            return False
     except Exception:
         release_event_delivery(evt, claim)
-        return
+        return False
     complete_event_delivery(evt, claim)
+    return True
 
 
 def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, completions=None, *, owned=False) -> bool:
@@ -601,8 +607,8 @@ def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, com
             return False
         time.sleep(0.25)  # back off: the re-queued event keeps the queue non-empty, else this loop spins at 100% CPU
         return True
-    _notif_dispatch_event(sid, session, evt, text)
-    note_heartbeat_delivered(evt, registry)
+    if _notif_dispatch_event(sid, session, evt, text):
+        note_heartbeat_delivered(evt, registry)
     return True
 
 
