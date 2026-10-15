@@ -67,3 +67,25 @@ def test_off_mutes_process_wakes_but_subagent_results_still_land(surface, tmp_pa
 
     assert server._notif_handle_event("sid", session, dict(DELEGATION), set(), registry, lambda e: "t", completions) is True
     assert [kw["display_kind"] for _, kw in surface] == ["async_delegation_complete"]
+
+
+def test_the_poller_drops_a_beat_whose_process_already_exited(surface):
+    """The Desktop/TUI poller is the other consumer of the same queue. A beat left over from a
+    process that has since exited must not claim a turn here either: the completion notice is the
+    wake, so the owner is never told "still running" about a job that already ended."""
+    from tools.process_registry import ProcessRegistry, ProcessSession
+
+    registry = ProcessRegistry()
+    dead = ProcessSession(id="proc_hb", command="npm test", notify_on_complete=True)
+    dead.mark_exited(1)
+    registry._finished[dead.id] = dead
+    session = _session()
+
+    assert server._notif_handle_event("sid", session, dict(HEARTBEAT), set(), registry, lambda e: "t", []) is True
+    assert surface == [] and session["running"] is False, "a stale beat claims no turn"
+
+    live = ProcessSession(id="proc_live", command="npm test", notify_on_complete=True)
+    registry._running[live.id] = live
+    assert server._notif_handle_event("sid", session, dict(HEARTBEAT, session_id="proc_live"), set(),
+                                      registry, lambda e: "t", []) is True
+    assert [kw["display_kind"] for _, kw in surface] == ["hidden"], "a running beat still wakes"

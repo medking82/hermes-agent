@@ -34,6 +34,7 @@ from hermes_cli.config import get_hermes_home
 
 from tools.process_registry_notifications import format_process_notification, is_child_process_notification, should_surface_notification
 from tools.process_registry_checkpoint import ProcessCheckpointMixin
+from tools.process_registry_heartbeat import ProcessHeartbeatMixin
 from tools.process_registry_output_log import ProcessOutputLogMixin, open_output_log, record_exit_command, worker_output_log
 from tools.process_registry_termination import ProcessTerminationMixin
 from tools.process_registry_results import load_completed_results, save_completed_result
@@ -589,6 +590,7 @@ class ProcessSession:
     _heartbeat_last: float = field(default=0.0, repr=False)          # time of the last heartbeat (or spawn)
     _heartbeat_total_at_last: int = field(default=0, repr=False)     # total_output_chars at that moment
     _heartbeat_seq: int = field(default=0, repr=False)
+    _heartbeat_delivered_seq: int = field(default=0, repr=False)     # highest seq a consumer already received
     _watch_hits: int = field(default=0, repr=False)          # total matches delivered
     _watch_suppressed: int = field(default=0, repr=False)    # matches dropped by rate limit
     _watch_disabled: bool = field(default=False, repr=False) # permanently killed after strike limit
@@ -671,7 +673,8 @@ _WSL_CHAIN_NOTE = (
 )
 
 
-class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOutputLogMixin):
+class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOutputLogMixin,
+                      ProcessHeartbeatMixin):
     """In-memory registry of running and finished background processes.
     Thread-safe: accessed from executor threads (terminal_tool, process handlers),
     the gateway asyncio loop (watchers, reset checks) and the cleanup thread."""
@@ -721,65 +724,8 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         self.on_close = None
         self._heartbeat_thread: Optional[threading.Thread] = None
 
-    # ── heartbeat ───────────────────────────────────────────────────────────
-    def arm_heartbeat(self, session: ProcessSession, seconds: int) -> int:
-        """Enable periodic heartbeat events for ``session``; returns the effective interval."""
-        seconds = max(int(seconds), HEARTBEAT_MIN_SECONDS)
-        session.heartbeat_seconds = seconds
-        session._heartbeat_last = time.time()
-        # The output baseline stays at spawn (field default 0), never here: the spawn call
-        # arms the heartbeat only after its bookkeeping, and a fast-starting process has
-        # already written its first lines by then. Those lines belong to the first heartbeat.
-        self._ensure_heartbeat_thread()
-        return seconds
-
-    def _ensure_heartbeat_thread(self) -> None:
-        with self._lock:
-            if self._heartbeat_thread is not None and self._heartbeat_thread.is_alive():
-                return
-            self._heartbeat_thread = threading.Thread(
-                target=self._heartbeat_loop, name="process-heartbeat", daemon=True)
-            self._heartbeat_thread.start()
-
-    def _heartbeat_loop(self) -> None:
-        """One daemon thread for every heartbeat session: reader threads block on the pipe and
-        cannot keep time, and a per-process timer would leak one thread per job."""
-        while True:
-            time.sleep(HEARTBEAT_TICK_SECONDS)
-            now = time.time()
-            with self._lock:
-                due = [s for s in self._running.values()
-                       if s.heartbeat_seconds > 0 and not s.exited
-                       and now - s._heartbeat_last >= s.heartbeat_seconds]
-            for session in due:
-                self._emit_heartbeat(session, now)
-
-    def _emit_heartbeat(self, session: ProcessSession, now: float) -> None:
-        """Queue a heartbeat carrying the output since the last one. A tick with nothing new is
-        skipped outright: every queued event costs the owner a full model turn, and "still running,
-        no output" is already visible on the process surfaces (status stack, /agents dock)."""
-        session._heartbeat_last = now
-        with session._lock:
-            delta = session.total_output_chars - session._heartbeat_total_at_last
-            output = session.output_buffer[-delta:] if delta > 0 else ""
-            session._heartbeat_total_at_last = session.total_output_chars
-        if not output:
-            return
-        if len(output) > HEARTBEAT_OUTPUT_CHARS:
-            cut = len(output) - HEARTBEAT_OUTPUT_CHARS
-            output = f"...({cut} earlier characters omitted)\n" + output[-HEARTBEAT_OUTPUT_CHARS:]
-        session._heartbeat_seq += 1
-        notification = {
-            **self._watch_event_base(session),
-            "type": "heartbeat",
-            "seq": session._heartbeat_seq,
-            "interval": session.heartbeat_seconds,
-            "elapsed": int(now - session.started_at) if session.started_at else 0,
-            "output": output,
-            "started_at": session.started_at,
-        }
-        _redact_process_result(notification)
-        self.completion_queue.put(notification)
+    # Heartbeat arming/loop/emission and the queued-beat staleness rules live in the topical
+    # sibling (ProcessHeartbeatMixin): see tools/process_registry_heartbeat.py.
 
     @staticmethod
     def _clean_shell_noise(text: str) -> str:
@@ -1884,7 +1830,10 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
                         "type=%s session_id=%s task_id=%s",
                         evt.get("type", "completion"), _evt_sid, _evt_task_id)
                     continue
+            if self.heartbeat_is_stale(evt):
+                continue
             if text := format_process_notification(evt):
+                self.note_heartbeat_delivered(evt)
                 results.append((evt, text))
         for evt in requeue:
             self.completion_queue.put(evt)

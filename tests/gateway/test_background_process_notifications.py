@@ -324,6 +324,30 @@ async def test_post_turn_watch_drain_all_injects_from_queued_event_origin(monkey
 
 
 @pytest.mark.asyncio
+async def test_post_turn_watch_drain_drops_a_beat_from_an_exited_process(monkeypatch, tmp_path):
+    """The messaging surface follows the same rule as Desktop and the CLI: a beat still queued
+    for a process that has since exited is consumed, never injected — no chat is told
+    "still running" about a job that already finished."""
+    import tools.process_registry as process_registry_module
+
+    runner = _build_runner(monkeypatch, tmp_path, "all")
+    adapter = runner.adapters[Platform.TELEGRAM]
+    completion_queue = queue.Queue()
+    completion_queue.put({"type": "heartbeat", "session_id": "proc_dead", "seq": 2, "elapsed": 120.0,
+                          "interval": 60, "command": "npm test", "output": "1 failing\n"})
+    registry = process_registry_module.ProcessRegistry()
+    dead = process_registry_module.ProcessSession(id="proc_dead", command="npm test", notify_on_complete=True)
+    dead.mark_exited(1)
+    registry._finished[dead.id] = dead
+    monkeypatch.setattr(process_registry_module, "process_registry", registry)
+
+    await runner._drain_watch_notifications(completion_queue)
+
+    adapter.handle_message.assert_not_awaited()
+    assert completion_queue.empty(), "the stale beat is consumed, not requeued"
+
+
+@pytest.mark.asyncio
 async def test_inject_watch_notification_drops_stale_trigger_reply_anchor(monkeypatch, tmp_path):
     """Regression for #52694: the synthetic watch event must not reuse the triggering
     message id as its reply anchor.

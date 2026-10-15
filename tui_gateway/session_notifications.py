@@ -570,6 +570,9 @@ def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, com
         return True
     if evt_type == "completion" and registry.is_completion_consumed(evt.get("session_id", "")):
         return True
+    from tools.process_registry_notifications import note_heartbeat_delivered, stale_heartbeat
+    if stale_heartbeat(evt, registry):
+        return True
     text = fmt(evt)
     if not text:
         return True
@@ -599,6 +602,7 @@ def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, com
         time.sleep(0.25)  # back off: the re-queued event keeps the queue non-empty, else this loop spins at 100% CPU
         return True
     _notif_dispatch_event(sid, session, evt, text)
+    note_heartbeat_delivered(evt, registry)
     return True
 
 

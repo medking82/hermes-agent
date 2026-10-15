@@ -685,8 +685,12 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
         See #9290.
         """
         from gateway.run import _drain_gateway_watch_events, _format_gateway_process_notification
+        from tools.process_registry import process_registry
+        from tools.process_registry_notifications import note_heartbeat_delivered, stale_heartbeat
         watch_events = _drain_gateway_watch_events(completion_queue)
         for evt in watch_events:
+            if stale_heartbeat(evt, process_registry):
+                continue
             async with self._completion_event_scope(evt):
                 from tools.process_registry_notifications import should_surface_notification
                 if not should_surface_notification(evt):
@@ -701,6 +705,8 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
                 except Exception:
                     logger.exception("Watch notification injection error")
                     delivered = False
+                if delivered is not False:
+                    note_heartbeat_delivered(evt, process_registry)
             if delivered is False:
                 completion_queue.put(evt)
 

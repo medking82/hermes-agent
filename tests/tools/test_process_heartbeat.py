@@ -158,3 +158,58 @@ def test_terminal_dispatch_heartbeat_implies_notify_and_foreground_runs_without_
     bg = json.loads(dispatch({"command": "sleep 1", "background": True, "heartbeat": 120}))
     assert "error" not in bg or not bg["error"]
     assert captured["heartbeat"] == 120 and captured["notify_on_complete"] is True
+
+
+def _queued_heartbeat(registry, session, seq, now):
+    """Queue a beat the way the heartbeat loop does (carrying only the new output)."""
+    session.output_buffer += f"line {seq}\n"
+    session.total_output_chars += len(f"line {seq}\n")
+    registry._emit_heartbeat(session, now=now)
+
+
+def test_a_heartbeat_queued_before_exit_never_wakes_after_it():
+    """A heartbeat is scaffolding for a RUNNING process: "still running, here is the new output".
+    Once the process exited, the completion notice is the state and ``process log`` holds the
+    output, so a beat left on the queue must not wake the owner with "still running" after the
+    exit — the owner then reads it as a live job and answers a process that is already gone."""
+    registry = ProcessRegistry()
+    session = pr.ProcessSession(id="proc_hb", command="npm test", notify_on_complete=True)
+    registry._running[session.id] = session
+
+    _queued_heartbeat(registry, session, 1, now=100.0)
+    assert [e["seq"] for e, _ in registry.drain_notifications()] == [1], "running beats wake"
+
+    _queued_heartbeat(registry, session, 2, now=200.0)   # queued while the process was alive
+    session.mark_exited(1)                               # ...and it exits before the next drain
+    registry._running.pop(session.id, None)
+    registry._finished[session.id] = session
+
+    assert registry.drain_notifications() == []
+
+
+def test_a_superseded_heartbeat_never_arrives_after_a_newer_one():
+    """A busy owner re-queues the beat it cannot deliver at the tail of the queue, so an older
+    beat can land behind a newer one. The newer beat already carried the newer output; dropping
+    the stale one keeps one wake per useful update and the delivery order monotonic."""
+    registry = ProcessRegistry()
+    session = pr.ProcessSession(id="proc_hb", command="npm test", notify_on_complete=True)
+    registry._running[session.id] = session
+    base = {"type": "heartbeat", "session_id": session.id, "command": "npm test", "interval": 60}
+
+    for seq in (2, 1):  # the re-queued shape: seq 1 came back behind seq 2
+        registry.completion_queue.put({**base, "seq": seq, "elapsed": seq * 60.0, "output": f"line {seq}\n"})
+
+    assert [e["seq"] for e, _ in registry.drain_notifications()] == [2]
+
+
+def test_an_exited_process_still_delivers_its_completion_notice():
+    """The stale-beat guard never touches a real result: the completion of an exited process is
+    exactly what the owner must still receive (and a failed one especially)."""
+    registry = ProcessRegistry()
+    session = pr.ProcessSession(id="proc_done", command="npm test", notify_on_complete=True)
+    session.mark_exited(1)
+    registry._finished[session.id] = session
+    registry.completion_queue.put({"type": "completion", "session_id": session.id, "command": "npm test",
+                                   "exit_code": 1, "output": "1 failing\n", "started_at": session.started_at})
+
+    assert [e["type"] for e, _ in registry.drain_notifications()] == ["completion"]

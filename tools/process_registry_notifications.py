@@ -3,9 +3,12 @@ watch_match, watch_disabled, watch_overflow_*, async_delegation) into the
 ``[IMPORTANT: ...]`` / ``[ASYNC DELEGATION ...]`` text the CLI drain loop, gateway and
 TUI inject into the agent conversation."""
 
+import logging
 import time
 from dataclasses import dataclass
 from contextlib import suppress
+
+logger = logging.getLogger(__name__)
 
 _DONE = ("completed", "success")
 _REASON_STATUS = {"lost": "marked lost because the process backend disappeared", "failed_start": "failed to start"}
@@ -374,6 +377,32 @@ def heartbeat_display_text(evt: dict) -> str:
     cmd = _short_command(evt.get("command"))
     age = _format_age(float(evt.get("elapsed") or 0))
     return f"Background Process Output after {age}: {cmd}" if cmd else f"Background Process Output after {age}"
+
+
+def stale_heartbeat(evt: dict, registry) -> bool:
+    """True when a queued ``heartbeat`` must not wake its owner (``ProcessRegistry.heartbeat_is_stale``).
+
+    Every consumer of the shared completion queue asks this before delivering a beat, so an agent
+    turn never answers "still running" for a process that already exited or for a beat that a newer
+    one superseded. A registry without the check, or a check that raises, delivers instead:
+    notification hygiene never swallows a wake.
+    """
+    check = getattr(registry, "heartbeat_is_stale", None)
+    if check is None or evt.get("type") != "heartbeat":
+        return False
+    try:
+        return bool(check(evt))
+    except Exception:
+        logger.warning("heartbeat staleness check failed; delivering the beat", exc_info=True)
+        return False
+
+
+def note_heartbeat_delivered(evt: dict, registry) -> None:
+    """Record a delivered beat so a re-queued older one is recognised as superseded (see ``stale_heartbeat``)."""
+    note = getattr(registry, "note_heartbeat_delivered", None)
+    if note is not None:
+        with suppress(Exception):
+            note(evt)
 
 
 class TimelineNotification(str):
