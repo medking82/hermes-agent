@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["vite/client", "node"],
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": [
+    "mobile/**/*.ts",
+    "mobile/**/*.tsx",
+    "vite.mobile.config.ts",
+    "vitest.mobile.config.ts",
+    "src/global.d.ts"
+  ],
+  "exclude": ["mobile/**/*.test.ts", "mobile/**/*.test.tsx", "mobile/e2e"]
+}
