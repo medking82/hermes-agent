@@ -376,7 +376,7 @@ async def test_a_beat_with_no_gateway_route_is_consumed_but_not_recorded(monkeyp
 
     adapter.handle_message.assert_not_awaited()
     assert registry.completion_queue.empty(), "consumed once, never requeued"
-    assert registry.heartbeat_is_stale(beat) is False, "no delivery happened, so nothing is recorded"
+    assert live._heartbeat_delivered_seq == 0, "no delivery happened, so nothing is recorded"
 
 
 @pytest.mark.asyncio

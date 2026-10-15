@@ -290,3 +290,17 @@ def test_a_payload_that_is_not_even_an_event_is_delivered_not_raised():
     registry = ProcessRegistry()
     for junk in (None, "heartbeat", 7, ["heartbeat"]):
         assert stale_heartbeat(junk, registry) is False
+
+
+def test_a_non_event_on_the_queue_does_not_abort_the_drain():
+    """The queue is internal, so a non-dict entry is a producer bug — but the drain pops every
+    following event before judging it, so it must skip the junk instead of raising and losing them."""
+    registry = ProcessRegistry()
+    session = pr.ProcessSession(id="proc_hb", command="npm test", notify_on_complete=True)
+    registry._running[session.id] = session
+    registry.completion_queue.put(None)
+    registry.completion_queue.put("not an event")
+    registry.completion_queue.put({"type": "heartbeat", "session_id": session.id, "seq": 1,
+                                   "elapsed": 60.0, "interval": 60, "output": "line 1\n"})
+
+    assert [e["seq"] for e, _ in registry.drain_notifications()] == [1], "the real event still lands"

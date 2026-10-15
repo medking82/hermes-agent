@@ -1803,6 +1803,11 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
                 evt = self.completion_queue.get_nowait()
             except Exception:
                 break
+            if not isinstance(evt, dict):
+                # A non-event on the queue is a producer bug; dropping it keeps the drain (which
+                # already popped every following event) from aborting and losing real ones.
+                logger.warning("Dropping a non-event on the completion queue: %s", type(evt).__name__)
+                continue
             is_async_delegation = evt.get("type") == "async_delegation"
             if not self._owns_event(evt, session_key, owns_event, is_async_delegation):
                 requeue.append(evt)
