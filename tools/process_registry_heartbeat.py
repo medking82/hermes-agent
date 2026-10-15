@@ -129,7 +129,8 @@ class ProcessHeartbeatMixin:
         Best-effort ordering, not a lock across the check: the delivery is an agent turn that starts
         after the check returns, so no lock could span it. Two consumers racing may both deliver the
         same beat (a duplicate, the safe direction). The recorded sequence itself advances under the
-        session lock, so a race cannot lower it back below a sequence already delivered.
+        session lock, so a race cannot lower it back below a sequence already delivered — callers
+        must therefore not already hold ``session._lock`` (``threading.Lock`` is not reentrant).
         """
         seq = evt.get("seq")
         if evt.get("type") != "heartbeat" or type(seq) is not int:

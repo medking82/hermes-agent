@@ -351,6 +351,35 @@ async def test_post_turn_watch_drain_drops_a_beat_from_an_exited_process(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_a_beat_with_no_gateway_route_is_consumed_but_not_recorded(monkeypatch, tmp_path):
+    """``_inject_watch_notification`` answers ``None`` when no route took the wake. The event is
+    consumed (never requeued into a loop), but nothing reached the owner, so the recorded sequence
+    must not advance — an older beat may still claim that wake."""
+    import tools.process_registry as process_registry_module
+
+    runner = _build_runner(monkeypatch, tmp_path, "all")
+    adapter = runner.adapters[Platform.TELEGRAM]
+    registry = process_registry_module.ProcessRegistry()
+    live = process_registry_module.ProcessSession(id="proc_hb", command="npm test", notify_on_complete=True)
+    registry._running[live.id] = live
+    monkeypatch.setattr(process_registry_module, "process_registry", registry)
+    beat = {"type": "heartbeat", "session_id": "proc_hb", "seq": 4, "elapsed": 240.0,
+            "interval": 60, "command": "npm test", "output": "line 4\n"}
+    registry.completion_queue.put(dict(beat))
+
+    async def _no_route(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(runner, "_inject_watch_notification", _no_route)
+
+    await runner._drain_watch_notifications(registry.completion_queue)
+
+    adapter.handle_message.assert_not_awaited()
+    assert registry.completion_queue.empty(), "consumed once, never requeued"
+    assert registry.heartbeat_is_stale(beat) is False, "no delivery happened, so nothing is recorded"
+
+
+@pytest.mark.asyncio
 async def test_inject_watch_notification_drops_stale_trigger_reply_anchor(monkeypatch, tmp_path):
     """Regression for #52694: the synthetic watch event must not reuse the triggering
     message id as its reply anchor.

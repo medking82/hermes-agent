@@ -280,3 +280,13 @@ def test_a_failing_check_never_costs_a_queued_beat(monkeypatch):
     assert stale_heartbeat(beat, duck) is False, "a check that raises delivers"
     assert stale_heartbeat({"type": "completion", "session_id": "proc_hb"}, duck) is False
     note_heartbeat_delivered(beat, duck)  # must not raise out of a delivery path
+
+
+def test_a_payload_that_is_not_even_an_event_is_delivered_not_raised():
+    """The wrapper is the guard every consumer calls with whatever came off the queue: a malformed
+    payload must answer "deliver" instead of raising out of the drain that already popped it."""
+    from tools.process_registry_notifications import stale_heartbeat
+
+    registry = ProcessRegistry()
+    for junk in (None, "heartbeat", 7, ["heartbeat"]):
+        assert stale_heartbeat(junk, registry) is False

@@ -379,17 +379,17 @@ def heartbeat_display_text(evt: dict) -> str:
     return f"Background Process Output after {age}: {cmd}" if cmd else f"Background Process Output after {age}"
 
 
-def stale_heartbeat(evt: dict, registry) -> bool:
+def stale_heartbeat(evt: object, registry) -> bool:
     """True when a queued ``heartbeat`` must not wake its owner (``ProcessRegistry.heartbeat_is_stale``).
 
     Every consumer of the shared completion queue asks this before delivering a beat, so an agent
     turn never answers "still running" for a process that already exited or for a beat that a newer
     one superseded. A registry without the check, or a check that raises, delivers instead:
-    notification hygiene never swallows a wake. The event is judged inside the guard too — a
-    malformed payload must not abort a drain that already popped it off the queue.
+    notification hygiene never swallows a wake. A payload that is not even a mapping is delivered
+    too — a malformed event must not abort a drain that already popped it off the queue.
     """
     check = getattr(registry, "heartbeat_is_stale", None)
-    if check is None:
+    if check is None or not isinstance(evt, dict):
         return False
     try:
         if evt.get("type") != "heartbeat":
