@@ -385,9 +385,10 @@ def stale_heartbeat(evt: object, registry) -> bool:
     Every consumer of the shared completion queue asks this before delivering a beat, so an agent
     turn never answers "still running" for a process that already exited or for a beat that a newer
     one superseded. A registry without the check, or a check that raises, delivers instead:
-    notification hygiene never swallows a wake. A payload that is not a dict is delivered too
-    (the guard's type check is a plain ``isinstance(evt, dict)``) — a malformed event must not
-    abort a drain that already popped it off the queue.
+    notification hygiene never swallows a wake. A payload that is not a dict is delivered to the
+    consumers that reach this guard with it (``isinstance(evt, dict)`` is a plain check); the
+    registry drain filters a non-event out earlier, so a malformed entry there is dropped with a
+    warning instead of aborting the events popped behind it.
     """
     check = getattr(registry, "heartbeat_is_stale", None)
     if check is None or not isinstance(evt, dict):
