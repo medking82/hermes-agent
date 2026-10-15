@@ -705,7 +705,9 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
                 except Exception:
                     logger.exception("Watch notification injection error")
                     delivered = False
-                if delivered is not False:
+                if delivered is True:
+                    # Only a route that actually took the wake counts: ``None`` means no gateway
+                    # route consumed the event, which is not a delivery to the owner.
                     note_heartbeat_delivered(evt, process_registry)
             if delivered is False:
                 completion_queue.put(evt)

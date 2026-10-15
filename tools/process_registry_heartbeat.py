@@ -129,14 +129,15 @@ class ProcessHeartbeatMixin:
         through the poller's own handler), and recording it here would make that consumer drop the
         beat as superseded before any model ever saw it.
 
-        Best-effort ordering, not a lock: the delivery is an agent turn that starts after the check
-        returns, so no lock could span it. Two consumers racing may both deliver the same beat (a
-        duplicate, the safe direction); a plain attribute store keeps the recorded sequence from
-        ever regressing below a sequence already delivered.
+        Best-effort ordering, not a lock across the check: the delivery is an agent turn that starts
+        after the check returns, so no lock could span it. Two consumers racing may both deliver the
+        same beat (a duplicate, the safe direction). The recorded sequence itself advances under the
+        session lock, so a race cannot lower it back below a sequence already delivered.
         """
         seq = evt.get("seq")
         if evt.get("type") != "heartbeat" or type(seq) is not int:
             return
         session = self._heartbeat_session(evt)
         if session is not None:
-            session._heartbeat_delivered_seq = max(seq, session._heartbeat_delivered_seq)
+            with session._lock:
+                session._heartbeat_delivered_seq = max(seq, session._heartbeat_delivered_seq)
