@@ -385,12 +385,15 @@ def stale_heartbeat(evt: dict, registry) -> bool:
     Every consumer of the shared completion queue asks this before delivering a beat, so an agent
     turn never answers "still running" for a process that already exited or for a beat that a newer
     one superseded. A registry without the check, or a check that raises, delivers instead:
-    notification hygiene never swallows a wake.
+    notification hygiene never swallows a wake. The event is judged inside the guard too — a
+    malformed payload must not abort a drain that already popped it off the queue.
     """
     check = getattr(registry, "heartbeat_is_stale", None)
-    if check is None or evt.get("type") != "heartbeat":
+    if check is None:
         return False
     try:
+        if evt.get("type") != "heartbeat":
+            return False
         return bool(check(evt))
     except Exception:
         logger.warning("heartbeat staleness check failed; delivering the beat", exc_info=True)

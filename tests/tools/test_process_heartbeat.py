@@ -262,6 +262,11 @@ def test_a_failing_check_never_costs_a_queued_beat(monkeypatch):
     beat = {"type": "heartbeat", "session_id": "proc_hb", "seq": 1, "elapsed": 60.0,
             "interval": 60, "command": "npm test", "output": "line 1\n"}
     registry = ProcessRegistry()
+    # An EXITED owner: the real check drops this beat, so returning it proves the fail-open
+    # wrapper, not the unknown-owner default.
+    dead = pr.ProcessSession(id="proc_hb", command="npm test", notify_on_complete=True)
+    dead.mark_exited(1)
+    registry._finished[dead.id] = dead
     registry.completion_queue.put(dict(beat))
     monkeypatch.setattr(registry, "heartbeat_is_stale", lambda evt: (_ for _ in ()).throw(RuntimeError("boom")))
 

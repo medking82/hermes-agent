@@ -2,15 +2,12 @@
 wake, its single timer thread, and the staleness rules that keep a queued beat from waking an owner
 after its process exited or behind a newer beat that was already delivered."""
 
-import logging
 import threading
 import time
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from tools.process_registry import ProcessSession
-
-logger = logging.getLogger("tools.process_registry")
 
 
 class ProcessHeartbeatMixin:
