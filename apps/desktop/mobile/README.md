@@ -37,6 +37,12 @@ The preview proxies only to the existing authenticated dashboard at `127.0.0.1:9
 - Auth expiry, reconnect limit/backoff, fresh ticket per reconnect, server snapshot recovery on return to foreground; never automatically resend an ambiguous prompt. Disconnection never interrupts the backend task.
 - Optimistic user bubbles are marked pending; unknown delivery is disclosed, never reported as successful delivery.
 
+## Model selection
+
+- The composer model label opens an accessible chooser on desktop and touch layouts. The catalog comes from the existing profile/session-scoped `model.options` RPC; unconfigured providers are excluded. Opening/cancelling never creates a session or sends a prompt.
+- New-chat picks stay local until the existing Send action passes `model` and `provider` to `session.create`. Existing chats use `config.set` with an explicit `--session` flag; profile defaults and reasoning settings are not edited. Running/disconnected/ambiguous-send states block switching. Refusals and confirmation requirements remain visible; there is no force/takeover, automatic confirmation, or retry. Models requiring an additional backend confirmation must be selected in Desktop.
+- Model changes do not clear text or uploaded-photo drafts. Photo upload, immutable image references, and existing session ownership checks remain unchanged. Browser fixture tests cover both phone and desktop layouts, not physical Safari acceptance or real inference.
+
 ## Photo upload scope
 
 - Selecting a photo uploads it to the existing same-origin `POST /api/chat/image-upload?profile=default` endpoint. It does not create/resume a session, submit a prompt, or invoke a model/tool. The thumbnail uses a local object URL; filenames are text, not HTML. Only after the user presses Send are uploaded paths included as ordinary `@image:` references in that one message. This keeps photos out of the shared mutable next-turn attachment queue and preserves the existing model/provider selection.
@@ -124,7 +130,7 @@ Browser fixture responses are conspicuously labelled **测试夹具**. They are 
 - The existing authenticated browser has loaded the real session list and connected status. The deployed v5 was then found to omit public sidecar text and cross-process saved updates; this fix restores only public output/projections and checks saved history while visible. It is not a cross-process live token mirror. Real model submission and physical-device acceptance remain unverified. Preview actions must respect foreground-session ownership; no credentials are copied and no auth bypass is added.
 - iPhone/iPad physical keyboard/IME, touch inertia, actual software keyboard, Safari toolbar/standalone mode and sleep/network transitions need real devices. Linux WebKit is additional engine coverage, not iOS hardware validation.
 - Complex/multi-question confirmation cards explicitly defer to Desktop. No auto-approval or permanent allowance is introduced. Native Electron window management, OS file browser, embedded webview and native notifications are not emulated.
-- The mobile site and Neo default-entry redirect are an attended sidecar trial. Frontend review/tests/publication are tracked in the exact release receipt; the isolated read-only backend lease candidate still requires its own separately authorized installation and live acceptance. This frontend cutover does not restart or replace that backend. It does not include a model-switch UI, multi-profile navigation, full Desktop artifact/media handling, offline cache or push notifications. PWA installation is not physically verified.
+- The mobile site and Neo default-entry redirect are an attended sidecar trial. Frontend review/tests/publication are tracked in the exact release receipt; the isolated read-only backend lease candidate still requires its own separately authorized installation and live acceptance. This frontend cutover does not restart or replace that backend. It does not include multi-profile navigation, full Desktop artifact/media handling, offline cache or push notifications. PWA installation is not physically verified.
 - Initial JS is currently a substantial shared-package bundle; no measured iOS performance claim is made. A successful production build is not a performance benchmark.
 
 ## Rollback

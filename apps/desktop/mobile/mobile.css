@@ -482,6 +482,12 @@ body {
 .composer-toolbar > div {
   gap: 5px;
 }
+.model-trigger {
+  min-height: 44px;
+  min-width: 44px;
+  max-width: min(42vw, 350px);
+  padding: 0 6px;
+}
 .model-label {
   max-width: min(42vw, 350px);
   overflow: hidden;
@@ -489,6 +495,18 @@ body {
   white-space: nowrap;
   color: var(--mobile-muted);
   font-size: 0.625rem;
+}
+.model-picker-body {
+  display: grid;
+  gap: 16px;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px;
+}
+.model-picker-body select {
+  width: 100%;
+  min-width: 0;
+  font-size: 16px;
 }
 .composer-toolbar .send-button {
   min-height: 44px;

@@ -1,6 +1,20 @@
 // Mobile-only copy. Existing Desktop labels are resolved from its shipped catalogs first.
 // Other locales fall back to English for mobile-specific explanations, never raw key names.
 export const mobileEnglish: Record<string, string> = {
+  选择模型: 'Choose Model',
+  模型: 'Model',
+  应用模型: 'Apply Model',
+  '正在加载模型…': 'Loading Models…',
+  '正在切换模型…': 'Switching Model…',
+  '只影响此对话，不修改全局默认模型；不会发送消息。':
+    'Only This Conversation; Global Defaults Stay Unchanged. No Message Is Sent.',
+  '没有可用的已配置模型。': 'No Configured Models Available.',
+  '模型列表加载失败，请重试。': 'Could Not Load Models. Please Retry.',
+  '模型切换失败，请重试。': 'Could Not Switch Model. Please Retry.',
+  '连接恢复且任务结束后才能切换模型。': 'Reconnect And Wait For The Current Task Before Switching Models.',
+  '此模型标识请在 Desktop 中选择。': 'Please Select This Model Identifier In Desktop.',
+  '此模型切换需要在 Desktop 中确认。': 'Please Confirm This Model Switch In Desktop.',
+  '模型切换未得到确认，请刷新会话核对。': 'Model Switch Not Confirmed. Refresh The Conversation To Check.',
   添加照片: 'Add Photos',
   选择照片: 'Choose Photos',
   待发送照片: 'Pending Photos',

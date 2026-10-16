@@ -31,10 +31,11 @@ import { extractImageRefs } from '../src/lib/embedded-images'
 
 import { AppearanceSettings } from './appearance-settings'
 import type { MobileController } from './controller'
-import { type SessionRow } from './controller'
+import { isComposerLocked, type SessionRow } from './controller'
 import type { Message } from './conversation'
 import { draftKey, shouldSubmitKey, viewportGeometry } from './input'
 import { getWebLocale, syncDocumentLocale, tr, useWebLocale } from './localization'
+import { ModelPicker } from './model-picker'
 import { MAX_PHOTOS, PHOTO_ACCEPT, photoMessage, usePhotoDraft } from './photo-draft'
 import { matchesSession, runtimeStatus, type SessionFilters } from './session-filters'
 import { SessionImage } from './session-image'
@@ -1042,7 +1043,7 @@ export function MobileApp({ controller }: { controller: MobileController }) {
                   >
                     <Paperclip />
                   </IconButton>
-                  <span className="model-label">{state.conversation?.model || tr('沿用后端默认模型')}</span>
+                  <ModelPicker controller={controller} key={state.conversation?.storedId ?? 'draft'} state={state} />
                 </div>
                 <div>
                   {busy && (
@@ -1061,9 +1062,7 @@ export function MobileApp({ controller }: { controller: MobileController }) {
                       !ready ||
                       (!draft.trim() && !photoDraft.photos.length) ||
                       photoDraft.blocked ||
-                      state.sending ||
-                      state.opening ||
-                      Boolean(state.uncertain)
+                      isComposerLocked(state)
                     }
                     type="submit"
                   >

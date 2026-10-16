@@ -17,6 +17,8 @@ test.beforeEach(async ({ page }) => {
 async function fixture(page: Page, long = false, rich = false) {
   let submits = 0
   let connections = 0
+  let model = 'fixture-model'
+  const modelChanges: Record<string, unknown>[] = []
 
   let messages: Array<{ role: string; content: string; codex_message_items?: unknown }> = long
     ? Array.from({ length: 40 }, (_, i) => ({
@@ -110,8 +112,24 @@ async function fixture(page: Page, long = false, rich = false) {
           messages: messages.map((message, index) => ({ ...message, _row_id: index + 1 })),
           running,
           status: running ? 'working' : 'idle',
-          info: { title: '测试夹具 · 移动体验', model: 'fixture-model' }
+          info: { title: '测试夹具 · 移动体验', model }
         }
+      }
+
+      if (request.method === 'model.options') {
+        result = {
+          model,
+          provider: 'fixture-provider',
+          providers: [
+            { slug: 'fixture-provider', name: 'Fixture Provider', models: ['fixture-model', 'fixture-alternative'] }
+          ]
+        }
+      }
+
+      if (request.method === 'config.set') {
+        modelChanges.push(request.params)
+        model = 'fixture-alternative'
+        result = { key: 'model', value: model, scope: 'session', confirm_required: false }
       }
 
       if (request.method === 'session.events.since') {
@@ -167,6 +185,7 @@ async function fixture(page: Page, long = false, rich = false) {
     },
     emit: (type: string, payload: unknown) => emitNative(type, payload),
     submits: () => submits,
+    modelChanges: () => modelChanges,
     connections: () => connections,
     saveReply(text: string) {
       messages = [
@@ -199,6 +218,59 @@ async function openSession(page: Page) {
   await expect(page.getByRole('status').filter({ hasText: '正在恢复对话' })).toHaveCount(0)
 }
 
+test('selects a session model on desktop and touch layouts without sending or losing photos', async ({
+  page
+}, info) => {
+  const backend = await fixture(page)
+  let uploads = 0
+  await page.route('**/api/chat/image-upload?*', route => {
+    uploads++
+
+    return route.fulfill({ json: { ok: true, path: '/home/fixture/.hermes/images/dashboard_picker.png' } })
+  })
+  await page.goto('/mobile/')
+  await openSession(page)
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('保留文字和照片')
+  await page
+    .getByLabel('添加照片')
+    .setInputFiles({ name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from('fixture') })
+  await expect(page.getByText('已上传，发送后才加入对话')).toBeVisible()
+  const trigger = page.getByRole('button', { name: '选择模型', exact: true })
+  const box = await trigger.boundingBox()
+  expect(box!.height).toBeGreaterThanOrEqual(44)
+
+  if (info.project.use.isMobile) {
+    await trigger.tap()
+  } else {
+    await trigger.click()
+  }
+
+  const dialog = page.getByRole('dialog', { name: '选择模型' })
+  await expect(dialog).toBeVisible()
+  await page
+    .getByRole('combobox', { name: '模型', exact: true })
+    .selectOption(JSON.stringify(['fixture-provider', 'fixture-alternative']))
+  expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+  await page.screenshot({ path: info.outputPath('model-picker.png') })
+  await page.getByRole('button', { name: '应用模型' }).click()
+  await expect(dialog).toBeHidden()
+  await expect(trigger).toContainText('fixture-alternative')
+  await expect(page.getByRole('textbox', { name: '消息', exact: true })).toHaveValue('保留文字和照片')
+  await expect(page.getByText('photo.png', { exact: true })).toBeVisible()
+  expect(uploads).toBe(1)
+  expect(backend.submits()).toBe(0)
+  expect(backend.modelChanges()).toEqual([
+    {
+      session_id: 'fixture-session',
+      profile: 'default',
+      key: 'model',
+      value: 'fixture-alternative --provider fixture-provider --session'
+    }
+  ])
+  await page.screenshot({ path: info.outputPath('model-selected-photo-retained.png') })
+})
+
 test('offers a return to mobile chat in the actual Dashboard bundle without starting work', async ({ page }, info) => {
   const root = process.env.MOBILE_DASHBOARD_FIXTURE_ROOT
   test.skip(!root, 'Requires the exact installed Dashboard static bundle; no production credentials are used.')
@@ -225,9 +297,21 @@ test('offers a return to mobile chat in the actual Dashboard bundle without star
     }
 
     if (url.pathname === '/api/dashboard/plugins') {
-      return route.fulfill({ json: [{ name: 'neo-mobile-web', version: '1.0.0', entry: 'index.js',
-        label: 'Mobile Chat', tab: { hidden: true }, slots: ['header-banner'], has_api: true }] })
+      return route.fulfill({
+        json: [
+          {
+            name: 'neo-mobile-web',
+            version: '1.0.0',
+            entry: 'index.js',
+            label: 'Mobile Chat',
+            tab: { hidden: true },
+            slots: ['header-banner'],
+            has_api: true
+          }
+        ]
+      })
     }
+
     if (url.pathname.startsWith('/api/')) {
       const body =
         url.pathname === '/api/sessions/stats'

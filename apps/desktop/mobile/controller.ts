@@ -1,4 +1,4 @@
-import type { ServerRequest } from '@hermes/shared'
+import type { ModelOptionsResult, ServerRequest } from '@hermes/shared'
 
 import type { PromptSubmitParams } from '../../shared/src/gateway-contract.generated'
 import { HermesGateway } from '../src/api/client'
@@ -21,6 +21,8 @@ export interface SessionRow {
   is_active?: boolean
 }
 export interface MobileState {
+  draftModel?: { model: string; provider: string }
+  modelChanging: boolean
   connection: 'connecting' | 'ready' | 'offline' | 'signin' | 'failed'
   sessions: SessionRow[]
   total: number
@@ -40,8 +42,13 @@ export interface MobileState {
   controls: ServerRequest[]
   syncError?: string
 }
+export function isComposerLocked(state: MobileState) {
+  return state.opening || state.sending || state.modelChanging || Boolean(state.uncertain)
+}
+
 export class MobileController {
   private state: MobileState = {
+    modelChanging: false,
     connection: 'connecting',
     sessions: [],
     total: 0,
@@ -458,9 +465,81 @@ export class MobileController {
       }
     }
   }
+  modelOptions(): Promise<ModelOptionsResult> {
+    return this.gateway.request('model.options', {
+      profile: this.profile,
+      ...(this.state.conversation ? { session_id: this.state.conversation.liveId } : {}),
+      explicit_only: true,
+      include_unconfigured: false
+    })
+  }
+  async selectModel(selection: { model: string; provider: string }) {
+    if (
+      this.disposed ||
+      this.state.connection !== 'ready' ||
+      this.state.opening ||
+      this.state.sending ||
+      this.state.uncertain ||
+      this.state.modelChanging ||
+      this.state.conversation?.running
+    ) {
+      throw new Error('连接恢复且任务结束后才能切换模型。')
+    }
+
+    // The existing RPC parses /model flags. A picker ID must stay one literal token.
+    if (![selection.model, selection.provider].every(value => /^[A-Za-z0-9][A-Za-z0-9_./:@+-]*$/.test(value))) {
+      throw new Error('此模型标识请在 Desktop 中选择。')
+    }
+
+    const current = this.state.conversation
+
+    if (!current) {
+      this.update({ draftModel: { model: selection.model, provider: selection.provider } })
+
+      return
+    }
+
+    const generation = this.openGeneration
+    const connection = this.liveGeneration
+    this.update({ modelChanging: true })
+
+    try {
+      const result = await this.gateway.request<{
+        value?: string
+        confirm_required?: boolean
+        confirm_message?: string
+      }>('config.set', {
+        session_id: current.liveId,
+        profile: this.profile,
+        key: 'model',
+        value: `${selection.model} --provider ${selection.provider} --session`
+      })
+
+      if (result.confirm_required) {
+        throw new Error(result.confirm_message || '此模型切换需要在 Desktop 中确认。')
+      }
+
+      if (!result.value) {
+        throw new Error('模型切换未得到确认，请刷新会话核对。')
+      }
+
+      if (
+        generation === this.openGeneration &&
+        connection === this.liveGeneration &&
+        this.state.connection === 'ready' &&
+        this.state.conversation?.liveId === current.liveId
+      ) {
+        this.update({ conversation: { ...this.state.conversation, model: result.value } })
+      }
+    } finally {
+      if (generation === this.openGeneration) {
+        this.update({ modelChanging: false })
+      }
+    }
+  }
   async open(storedId: string) {
     const generation = ++this.openGeneration
-    this.update({ opening: true, sending: false, error: undefined })
+    this.update({ opening: true, sending: false, modelChanging: false, draftModel: undefined, error: undefined })
 
     try {
       const snapshot = await this.gateway.request<Snapshot>('session.resume', {
@@ -490,6 +569,8 @@ export class MobileController {
     this.update({
       conversation: null,
       opening: false,
+      draftModel: undefined,
+      modelChanging: false,
       sending: false,
       error: undefined,
       syncError: undefined,
@@ -664,13 +745,7 @@ export class MobileController {
     this.update({ error: '此会话有待处理的确认。如果下方未出现操作卡，请在 Desktop 中处理。' })
   }
   async send(text: string, mode: 'normal' | 'queue' = 'normal') {
-    if (
-      this.state.connection !== 'ready' ||
-      this.state.opening ||
-      this.state.sending ||
-      this.state.uncertain ||
-      !text.trim()
-    ) {
+    if (this.state.connection !== 'ready' || isComposerLocked(this.state) || !text.trim()) {
       return false
     }
 
@@ -688,7 +763,8 @@ export class MobileController {
           profile: this.profile,
           source: 'web',
           close_on_disconnect: false,
-          idempotency_key: crypto.randomUUID()
+          idempotency_key: crypto.randomUUID(),
+          ...this.state.draftModel
         })
 
         if (generation !== this.openGeneration) {
