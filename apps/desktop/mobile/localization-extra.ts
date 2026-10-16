@@ -1,6 +1,20 @@
 // Mobile-only copy. Existing Desktop labels are resolved from its shipped catalogs first.
 // Other locales fall back to English for mobile-specific explanations, never raw key names.
 export const mobileEnglish: Record<string, string> = {
+  添加照片: 'Add Photos',
+  选择照片: 'Choose Photos',
+  待发送照片: 'Pending Photos',
+  移除照片: 'Remove Photo',
+  '正在上传照片…': 'Uploading Photo…',
+  '已上传，发送后才加入对话': 'Uploaded; Added To The Conversation Only When Sent',
+  '仅支持 JPEG、PNG、GIF、WebP、BMP；HEIC/HEIF 请先转为 JPEG。':
+    'Supported: JPEG, PNG, GIF, WebP, BMP. Convert HEIC/HEIF To JPEG First.',
+  '单张照片需大于 0 且不超过 20 MB。': 'Each Photo Must Be Nonempty And No Larger Than 20 MB.',
+  '最多添加 4 张照片，总大小不超过 50 MB。': 'Up To 4 Photos, With A Combined Limit Of 50 MB.',
+  '照片上传已超时，请移除后重选。': 'Upload Timed Out. Remove The Photo And Select It Again.',
+  '照片上传失败，请移除后重选。': 'Upload Failed. Remove The Photo And Select It Again.',
+  '上传未返回有效的照片路径。': 'Upload Did Not Return A Valid Photo Path.',
+  '读取照片失败，请重新选择。': 'Could Not Read The Photo. Select It Again.',
   '返回 Dashboard': 'Back To Dashboard',
   '试试调整筛选，或加载更早的会话。': 'Adjust Filters Or Load Earlier Sessions.',
   已载入范围: 'Loaded Scope',

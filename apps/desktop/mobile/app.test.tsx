@@ -50,6 +50,77 @@ function setup() {
   return { controller, rpc, api }
 }
 
+it('uploads a selected photo without starting a turn and submits its immutable reference only on send', async () => {
+  const { controller, rpc, api } = setup()
+  await waitFor(() => expect(controller.getSnapshot().connection).toBe('ready'))
+  const path = '/home/fixture/.hermes/images/dashboard_fixture.png'
+  api.request.mockImplementation(async (url: string) =>
+    url.startsWith('/api/chat/image-upload')
+      ? { ok: true, path, name: 'photo.png', bytes: 4, mime_type: 'image/png' }
+      : { sessions: [], total: 0 }
+  )
+  const picker = screen.getByLabelText('添加照片')
+  fireEvent.change(picker, { target: { files: [new File(['photo'], 'photo.png', { type: 'image/png' })] } })
+  await waitFor(() => expect(screen.getByText('photo.png')).toBeTruthy())
+  await waitFor(() =>
+    expect((screen.getByRole('button', { name: '发送消息' }) as HTMLButtonElement).disabled).toBe(false)
+  )
+  expect(api.request).toHaveBeenCalledWith(
+    '/api/chat/image-upload?profile=default',
+    expect.objectContaining({ method: 'POST' })
+  )
+  expect(
+    rpc.request.mock.calls.some(call =>
+      ['prompt.submit', 'session.create', 'image.attach', 'image.attach_bytes'].includes(call[0])
+    )
+  ).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: '发送消息' }))
+  await waitFor(() =>
+    expect(rpc.request).toHaveBeenCalledWith(
+      'prompt.submit',
+      expect.objectContaining({ text: `@image:${path}` }),
+      1800000
+    )
+  )
+  await waitFor(() => expect(screen.queryByText('photo.png')).toBeNull())
+  controller.dispose()
+})
+
+it('keeps photo references after an unknown send ACK and never retries the turn automatically', async () => {
+  const { controller, rpc, api } = setup()
+  await waitFor(() => expect(controller.getSnapshot().connection).toBe('ready'))
+  const path = '/home/fixture/.hermes/images/dashboard_fixture.png'
+  api.request.mockImplementation(async (url: string) =>
+    url.startsWith('/api/chat/image-upload') ? { ok: true, path } : { sessions: [], total: 0 }
+  )
+  rpc.request.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+    if (method === 'prompt.submit') {
+      throw new Error('lost ACK')
+    }
+
+    return {
+      session_id: String(params.session_id ?? 'created'),
+      stored_session_id: String(params.session_id ?? 'created'),
+      messages: [],
+      info: {}
+    }
+  })
+  fireEvent.change(screen.getByLabelText('添加照片'), {
+    target: { files: [new File(['photo'], 'photo.png', { type: 'image/png' })] }
+  })
+  await waitFor(() =>
+    expect((screen.getByRole('button', { name: '发送消息' }) as HTMLButtonElement).disabled).toBe(false)
+  )
+  fireEvent.click(screen.getByRole('button', { name: '发送消息' }))
+  await waitFor(() => expect(controller.getSnapshot().uncertain).toBe(`@image:${path}`))
+  expect(screen.getByText('photo.png')).toBeTruthy()
+  expect(localStorage.getItem(`${draftKey('default', 'created')}:photos`)).toContain(path)
+  expect((screen.getByRole('button', { name: /发送消息/ }) as HTMLButtonElement).disabled).toBe(true)
+  expect(rpc.request.mock.calls.filter(call => call[0] === 'prompt.submit')).toHaveLength(1)
+  expect(api.request.mock.calls.filter(call => String(call[0]).startsWith('/api/chat/image-upload'))).toHaveLength(1)
+  controller.dispose()
+})
+
 it('offers a same-tab Dashboard exit from a conversation and a new chat without starting work', async () => {
   const { controller, rpc } = setup()
   await waitFor(() => expect(controller.getSnapshot().connection).toBe('ready'))

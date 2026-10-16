@@ -1,0 +1,49 @@
+.mobile-photo-rail {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 6px 6px 0;
+  overscroll-behavior-inline: contain;
+}
+.mobile-photo-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  max-width: min(100%, 300px);
+  min-width: 0;
+  border: 1px solid var(--mobile-border);
+  border-radius: 12px;
+  padding-inline-start: 8px;
+  color: var(--mobile-ink);
+  background: var(--mobile-elevated);
+}
+.mobile-photo-chip img {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+.mobile-photo-chip > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-block: 6px;
+  gap: 2px;
+}
+.mobile-photo-chip span {
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mobile-photo-chip small {
+  font-size: 0.6875rem;
+  color: var(--mobile-muted);
+  overflow-wrap: anywhere;
+}
+.mobile-photo-chip small[role='alert'] {
+  color: var(--mobile-danger);
+}

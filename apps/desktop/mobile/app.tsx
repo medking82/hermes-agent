@@ -35,6 +35,7 @@ import { type SessionRow } from './controller'
 import type { Message } from './conversation'
 import { draftKey, shouldSubmitKey, viewportGeometry } from './input'
 import { getWebLocale, syncDocumentLocale, tr, useWebLocale } from './localization'
+import { MAX_PHOTOS, PHOTO_ACCEPT, photoMessage, usePhotoDraft } from './photo-draft'
 import { matchesSession, runtimeStatus, type SessionFilters } from './session-filters'
 import { SessionImage } from './session-image'
 import { ResizableSidebar, useNavigationCollapsed } from './sidebar'
@@ -590,6 +591,8 @@ export function MobileApp({ controller }: { controller: MobileController }) {
   const draftScopeRef = useRef(draftScope)
   const draftRef = useRef('')
   const navigation = useRef(0)
+  const photoInput = useRef<HTMLInputElement>(null)
+  const photoDraft = usePhotoDraft(controller.api, controller.profile, draftScope, navigation.current, state.sending)
   useLayoutEffect(() => {
     if (draftScopeRef.current !== draftScope) {
       save(draftScopeRef.current, draftRef.current)
@@ -685,11 +688,13 @@ export function MobileApp({ controller }: { controller: MobileController }) {
   const submit = async (event?: FormEvent, queue = false) => {
     event?.preventDefault()
 
-    if (composing.current || !draft.trim()) {
+    if (composing.current || photoDraft.blocked || (!draft.trim() && !photoDraft.photos.length)) {
       return
     }
 
-    const submitted = draft
+    const caption = draft
+    const submittedPhotos = photoDraft.photos.map(photo => photo.id)
+    const submitted = photoMessage(caption, photoDraft.photos)
     const key = draftScopeRef.current
     const epoch = navigation.current
     const wasNew = !state.conversation
@@ -699,15 +704,17 @@ export function MobileApp({ controller }: { controller: MobileController }) {
     const sent = await pendingSend
 
     if (sent) {
-      if (saved(key) === submitted) {
+      photoDraft.complete(submittedPhotos)
+
+      if (saved(key) === caption) {
         save(key, '')
       }
 
-      if (draftScopeRef.current === key && draftRef.current === submitted) {
+      if (draftScopeRef.current === key && draftRef.current === caption) {
         changeDraft('')
       }
     } else if (wasNew && epoch === navigation.current && !draftRef.current) {
-      changeDraft(submitted)
+      changeDraft(caption)
     }
   }
 
@@ -822,10 +829,16 @@ export function MobileApp({ controller }: { controller: MobileController }) {
             </Button>
           </div>
         )}
-        {(state.error || localError) && (
+        {(state.error || localError || photoDraft.error) && (
           <div className="error-banner" role="alert">
-            {tr(localError || state.error || '')}
-            <IconButton label={tr('关闭提示')} onClick={() => setLocalError('')}>
+            {tr(localError || state.error || photoDraft.error || '')}
+            <IconButton
+              label={tr('关闭提示')}
+              onClick={() => {
+                setLocalError('')
+                photoDraft.dismissError()
+              }}
+            >
               <X />
             </IconButton>
           </div>
@@ -946,6 +959,47 @@ export function MobileApp({ controller }: { controller: MobileController }) {
                 void submit(e, Boolean(busy))
               }}
             >
+              <input
+                accept={PHOTO_ACCEPT}
+                aria-label={tr('添加照片')}
+                className="sr-only"
+                multiple
+                onChange={event => {
+                  if (ready && !state.sending && !state.opening && !state.uncertain) {
+                    photoDraft.add(Array.from(event.currentTarget.files ?? []))
+                  }
+
+                  event.currentTarget.value = ''
+                }}
+                ref={photoInput}
+                type="file"
+              />
+              {photoDraft.photos.length > 0 && (
+                <div aria-label={tr('待发送照片')} className="mobile-photo-rail">
+                  {photoDraft.photos.map(photo => (
+                    <div className="mobile-photo-chip" key={photo.id}>
+                      {photo.preview && <img alt="" src={photo.preview} />}
+                      <div>
+                        <span>{photo.name}</span>
+                        <small role={photo.status === 'failed' ? 'alert' : 'status'}>
+                          {photo.status === 'uploading'
+                            ? tr('正在上传照片…')
+                            : photo.status === 'ready'
+                              ? tr('已上传，发送后才加入对话')
+                              : tr(photo.error || '照片上传失败，请移除后重选。')}
+                        </small>
+                      </div>
+                      <IconButton
+                        disabled={state.sending}
+                        label={`${tr('移除照片')} ${photo.name}`}
+                        onClick={() => photoDraft.remove([photo.id])}
+                      >
+                        <X />
+                      </IconButton>
+                    </div>
+                  ))}
+                </div>
+              )}
               <textarea
                 aria-label={tr('消息')}
                 dir="auto"
@@ -975,7 +1029,17 @@ export function MobileApp({ controller }: { controller: MobileController }) {
               />
               <div className="composer-toolbar">
                 <div>
-                  <IconButton disabled label={tr('图片发送尚未启用')}>
+                  <IconButton
+                    disabled={
+                      !ready ||
+                      state.sending ||
+                      state.opening ||
+                      Boolean(state.uncertain) ||
+                      photoDraft.photos.length >= MAX_PHOTOS
+                    }
+                    label={tr('选择照片')}
+                    onClick={() => photoInput.current?.click()}
+                  >
                     <Paperclip />
                   </IconButton>
                   <span className="model-label">{state.conversation?.model || tr('沿用后端默认模型')}</span>
@@ -993,7 +1057,14 @@ export function MobileApp({ controller }: { controller: MobileController }) {
                   <Button
                     aria-label={busy ? tr('排队发送消息') : tr('发送消息')}
                     className="send-button"
-                    disabled={!ready || !draft.trim() || state.sending || state.opening || Boolean(state.uncertain)}
+                    disabled={
+                      !ready ||
+                      (!draft.trim() && !photoDraft.photos.length) ||
+                      photoDraft.blocked ||
+                      state.sending ||
+                      state.opening ||
+                      Boolean(state.uncertain)
+                    }
                     type="submit"
                   >
                     {state.sending ? <RefreshCw className="spin" /> : <ArrowUp />}

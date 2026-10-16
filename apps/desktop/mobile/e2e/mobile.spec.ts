@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import { readFile, writeFile } from 'node:fs/promises'
 
 import { expect, type Page, test } from '@playwright/test'
@@ -196,6 +197,44 @@ async function openSession(page: Page) {
     })
   await expect(page.getByRole('status').filter({ hasText: '正在恢复对话' })).toHaveCount(0)
 }
+
+test('uploads and removes a photo without submitting any turn', async ({ page }, info) => {
+  const backend = await fixture(page)
+  let uploads = 0
+  await page.route('**/api/chat/image-upload?profile=default', async route => {
+    uploads++
+    const body = route.request().postDataJSON()
+    expect(body.filename).toBe('fixture.png')
+    expect(body.data_url).toMatch(/^data:image\/png;base64,/)
+    await route.fulfill({ json: { ok: true, path: '/home/fixture/.hermes/images/dashboard_fixture.png' } })
+  })
+  await page.goto('/mobile/')
+  await expect(page.getByRole('button', { name: '选择照片' })).toBeEnabled()
+  await page
+    .getByLabel('添加照片')
+    .setInputFiles({
+      name: 'fixture.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j7tQAAAAASUVORK5CYII=',
+        'base64'
+      )
+    })
+  const rail = page.getByLabel('待发送照片')
+  await expect(rail.getByText('已上传，发送后才加入对话')).toBeVisible()
+  await expect
+    .poll(() => rail.locator('img').evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0))
+    .toBe(true)
+  expect(uploads).toBe(1)
+  expect(backend.submits()).toBe(0)
+  await expect(page.getByRole('button', { name: '发送消息', exact: true })).toBeEnabled()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: info.outputPath('photo-upload.png') })
+  await page.getByRole('button', { name: '移除照片 fixture.png' }).click()
+  await expect(rail).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '发送消息', exact: true })).toBeDisabled()
+  expect(backend.submits()).toBe(0)
+})
 
 test('returns to the management Dashboard without submitting work', async ({ page }, info) => {
   const backend = await fixture(page)

@@ -1,5 +1,6 @@
 @import '../src/styles.css';
 @import './session-filters.css';
+@import './photos.css';
 @source './**/*.{ts,tsx}';
 @source '../src/components/ui';
 @source '../../../node_modules/streamdown/dist';

@@ -31,13 +31,22 @@ The preview proxies only to the existing authenticated dashboard at `127.0.0.1:9
 
 - iPhone single-column chat with accessible, focus-trapped conversation drawer and an explicitly draggable handle; iPad two-column view when available space permits, narrow/split-view drawer fallback.
 - Conversation history, full-text search and incremental listing. Project, runtime-status, recorded-source and recent-activity filters combine by intersection, including during search. Filtering is explicitly limited to the loaded/result set, not an unbounded database-wide query. Default profile only in this iteration.
-- Markdown, code blocks, collapsible tool activity, copy, explicit stop and queue-on-busy. Image sending is explicitly disabled in this iteration; the dashboard's submit contract does not accept canonical attachment payloads.
+- Markdown, code blocks, collapsible tool activity, copy, explicit stop and queue-on-busy. Photos use the existing authenticated upload endpoint and immutable `@image:` references in the existing prompt text; no new submit parameter or backend-wide pending-attachment buffer is introduced.
 - Enter is newline; Cmd/Ctrl+Enter sends. Composition state and keyCode 229 guard candidate-confirmation events. Explicit click still respects active composition.
 - Per-profile/durable-session local drafts, visible-viewport keyboard geometry, safe areas, system text selection/zoom and reduced motion.
 - Auth expiry, reconnect limit/backoff, fresh ticket per reconnect, server snapshot recovery on return to foreground; never automatically resend an ambiguous prompt. Disconnection never interrupts the backend task.
 - Optimistic user bubbles are marked pending; unknown delivery is disclosed, never reported as successful delivery.
 
-## Session filter data and scope (candidate, not yet published)
+## Photo upload scope
+
+- Selecting a photo uploads it to the existing same-origin `POST /api/chat/image-upload?profile=default` endpoint. It does not create/resume a session, submit a prompt, or invoke a model/tool. The thumbnail uses a local object URL; filenames are text, not HTML. Only after the user presses Send are uploaded paths included as ordinary `@image:` references in that one message. This keeps photos out of the shared mutable next-turn attachment queue and preserves the existing model/provider selection.
+- Supported types: JPEG, PNG, GIF, WebP and BMP. HEIC/HEIF and SVG are not silently accepted; the current backend rejects them, and the picker explains conversion to JPEG. Physical Safari library transcoding is not claimed. No camera permission or forced capture is requested by the page.
+- The backend cap is25 MiB. The client deliberately limits each photo to20 MiB so base64 history thumbnails fit the existing32 MiB reader budget; at most4 photos and50 MiB total are admitted. Uploads are serialized, carry a60-second cancellation deadline and never automatically retry. Errors remain visible and block Send until the failed item is removed.
+- Uploaded path/name/size metadata is scoped to the local profile/session draft; no photo bytes, data URLs or blob URLs enter localStorage. New-draft → newly created session adoption is limited to the same send/navigation generation. Explicit navigation cancels pending requests; late responses cannot attach to a different conversation. Unknown send ACKs retain refs and require explicit reconciliation, never automatic resubmission. A successful late ACK clears only its own submitted refs even after navigation.
+- Remove cancels/drops the item from the draft and releases its preview. It does not delete an already uploaded server file or retract a message already admitted by the server. Actual image analysis/model interaction and physical iPhone/iPad acceptance remain separate and were not exercised by this implementation.
+- The Mobile → management Dashboard exit targets `/sessions?profile=default`, not terminal `/chat`. The official Dashboard has not yet received a dedicated reverse Mobile link; browser Back remains available. No Dashboard bundle/plugin/config mutation is hidden in this photo change.
+
+## Session filter data and scope
 
 - Search uses the existing authenticated full-text/title/ID search endpoint with `limit=100`. That endpoint has no paging contract; reaching100 results displays a narrow-your-keywords warning. Search can include archived hits under the existing backend contract. Normal history still uses40-row saved pages and its existing archive exclusion. The shown matching/loaded count is **not** the database-wide filtered total; loading earlier pages widens the candidates. Project/source options accumulate from metadata actually returned in this mounted controller, not inferred from every backend session.
 - Project uses `git_repo_root || cwd`, exact path identity. Search no longer bypasses a selected project. When project + search is selected and a hit omits project fields, use the existing same-origin authenticated session-detail GET, max4 concurrent reads and max100 hits. Superseded/disposed searches stop dispatching further reads and never commit their old rows/options. In-flight reads retain BrowserApi's existing60-second deadline. The detail endpoint can return a full session record; the projection retains only id/title/snippet/model/source/project/activity fields, never prompt/config/message bodies. No message-history request or session resume is used to discover filters. Missing/unreadable metadata displays an incomplete-project warning, never invents a path.
@@ -76,12 +85,11 @@ Glass surface opacity is 0–100%. Backdrop strength (0–100%, original 2.5% de
 Playwright projects cover desktop Chromium plus Chromium and WebKit with iPhone/iPad geometry. The responsive test visits eight CSS viewport sizes per project, from phone portrait/landscape through 3840x2160, retaining a draft and checking bounded content. Chromium mobile contexts also exercise trusted touch move/cancel and secondary-finger handling through CDP. A local Chrome path is configured for this host. Use `HEADED_LAYOUT=1 xvfb-run -a` before Playwright for the desktop project's actual fine-pointer branch; the normal headless/no-primary-pointer branch remains supported. This is not a claim of native macOS/iOS or real 4K monitor validation. Standard WebKit installs need their documented OS dependencies. During this session the missing packages were **downloaded and extracted privately**, not installed system-wide; an isolated launcher supplied the bundled WebKit paths plus extracted libraries. Session-specific invocation:
 
 ```sh
-WEBKIT_TEST_EXECUTABLE=/home/marck/.hermes/cache/scratch/hermes-webkit-libs/launch-webkit.sh \
-LD_LIBRARY_PATH=/home/marck/.hermes/cache/scratch/hermes-webkit-libs/unpacked/usr/lib/x86_64-linux-gnu \
+WEBKIT_TEST_EXECUTABLE=/home/marck/.hermes/workspace/maintenance/neo-mobile-fix/photo-upload/test-deps/launch-webkit.sh \
 ../../node_modules/.bin/playwright test --config playwright.mobile.config.ts
 ```
 
-That scratch launcher is temporary, not a permanent application dependency.
+That test-only launcher is not an application dependency. The earlier scratch launcher expired; the replacement retains the same actual Playwright WebKit binary and privately extracted compatibility library without modifying system packages.
 
 Browser fixture responses are conspicuously labelled **测试夹具**. They are synthetic protocol/UI tests, not real model output. The unauthenticated test uses the real backend and checks that sign-in is still required. Screenshots are in ignored `mobile/test-results/`.
 
