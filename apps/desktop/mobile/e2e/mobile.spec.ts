@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { readFile, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 
 import { expect, type Page, test } from '@playwright/test'
 
@@ -198,6 +199,105 @@ async function openSession(page: Page) {
   await expect(page.getByRole('status').filter({ hasText: '正在恢复对话' })).toHaveCount(0)
 }
 
+test('offers a return to mobile chat in the actual Dashboard bundle without starting work', async ({ page }, info) => {
+  const root = process.env.MOBILE_DASHBOARD_FIXTURE_ROOT
+  test.skip(!root, 'Requires the exact installed Dashboard static bundle; no production credentials are used.')
+  const dashboardRoot = path.resolve(root!)
+  const writes: string[] = []
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.stack || error.message))
+  page.on('requestfailed', request =>
+    errors.push(`${new URL(request.url()).pathname}: ${request.failure()?.errorText}`)
+  )
+  page.on('console', message => {
+    if (message.type() === 'error') {
+      errors.push(message.text())
+    }
+  })
+
+  const html = (await readFile(path.join(dashboardRoot, 'index.html'), 'utf8')).replace(
+    '</head>',
+    '<script type="module" src="/mobile/dashboard-link.js"></script></head>'
+  )
+
+  await page.route('**/*', async route => {
+    const url = new URL(route.request().url())
+
+    if (route.request().method() !== 'GET') {
+      writes.push(url.pathname)
+    }
+
+    if (url.pathname.startsWith('/api/')) {
+      const body =
+        url.pathname === '/api/sessions/stats'
+          ? { total: 0, active_store: 0, archived: 0, messages: 0, by_source: {} }
+          : url.pathname === '/api/auth/me'
+            ? { provider: 'loopback' }
+            : url.pathname === '/api/profiles/active'
+              ? { current: 'default', active: 'default' }
+              : url.pathname.includes('profiles')
+                ? { profiles: [{ name: 'default' }] }
+                : url.pathname.includes('sessions')
+                  ? { sessions: [], total: 0, has_more: false }
+                  : url.pathname.includes('plugins')
+                    ? []
+                    : {}
+
+      return route.fulfill({ json: body })
+    }
+
+    if (url.pathname === '/sessions') {
+      return route.fulfill({ contentType: 'text/html', body: html })
+    }
+
+    if (url.pathname === '/mobile/') {
+      return route.fulfill({ contentType: 'text/html', body: '<main>Mobile Chat Fixture</main>' })
+    }
+
+    if (url.pathname === '/mobile/dashboard-link.js') {
+      return route.fulfill({ path: path.resolve('mobile/public/dashboard-link.js') })
+    }
+
+    const file = path.resolve(dashboardRoot, '.' + decodeURIComponent(url.pathname))
+
+    if (!file.startsWith(dashboardRoot + path.sep)) {
+      return route.abort()
+    }
+
+    try {
+      return await route.fulfill({ path: file })
+    } catch {
+      return route.abort()
+    }
+  })
+  await page.goto('/sessions?profile=default')
+  const link = page.getByRole('link', { name: /Back To Mobile Chat|返回手机聊天/ })
+  await expect(link)
+    .toBeVisible()
+    .catch(async error => {
+      await info.attach('dashboard-load-diagnostics', {
+        body: JSON.stringify({
+          errors,
+          host: await page.evaluate(() => ({
+            sdk: Boolean((window as unknown as Record<string, unknown>).__HERMES_PLUGIN_SDK__),
+            content: window.document.body.innerText.slice(0, 500)
+          }))
+        }),
+        contentType: 'application/json'
+      })
+      throw error
+    })
+  await expect(link).toHaveAttribute('href', '/mobile/')
+  expect(await link.getAttribute('target')).toBeNull()
+  const rect = await link.boundingBox()
+  expect(rect!.height).toBeGreaterThanOrEqual(44)
+  expect(await page.evaluate(() => window.document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.screenshot({ path: info.outputPath('dashboard-to-mobile.png'), fullPage: false })
+  await link.click()
+  await expect(page).toHaveURL(/\/mobile\/$/)
+  expect(writes).toEqual([])
+})
+
 test('uploads and removes a photo without submitting any turn', async ({ page }, info) => {
   const backend = await fixture(page)
   let uploads = 0
@@ -210,16 +310,14 @@ test('uploads and removes a photo without submitting any turn', async ({ page },
   })
   await page.goto('/mobile/')
   await expect(page.getByRole('button', { name: '选择照片' })).toBeEnabled()
-  await page
-    .getByLabel('添加照片')
-    .setInputFiles({
-      name: 'fixture.png',
-      mimeType: 'image/png',
-      buffer: Buffer.from(
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j7tQAAAAASUVORK5CYII=',
-        'base64'
-      )
-    })
+  await page.getByLabel('添加照片').setInputFiles({
+    name: 'fixture.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j7tQAAAAASUVORK5CYII=',
+      'base64'
+    )
+  })
   const rail = page.getByLabel('待发送照片')
   await expect(rail.getByText('已上传，发送后才加入对话')).toBeVisible()
   await expect
