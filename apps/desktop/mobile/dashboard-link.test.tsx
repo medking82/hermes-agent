@@ -13,8 +13,10 @@ it('registers a same-tab mobile-chat exit through the existing Dashboard slot', 
   globalThis.document.documentElement.lang = 'zh'
   history.replaceState(null, '', '/sessions?profile=default')
   const registerSlot = vi.fn()
-  expect(registerMobileNavigation({ React }, { registerSlot })).toBe(true)
-  expect(registerSlot).toHaveBeenCalledWith('neo-mobile-navigation', 'header-banner', expect.any(Function))
+  const register = vi.fn()
+  expect(registerMobileNavigation({ React }, { registerSlot, register })).toBe(true)
+  expect(register).toHaveBeenCalledWith('neo-mobile-web', expect.any(Function))
+  expect(registerSlot).toHaveBeenCalledWith('neo-mobile-web', 'header-banner', expect.any(Function))
   const Component = registerSlot.mock.calls[0][2]
   render(React.createElement(Component))
   const link = screen.getByRole('link', { name: '返回手机聊天' })

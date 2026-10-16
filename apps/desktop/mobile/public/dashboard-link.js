@@ -1,5 +1,5 @@
-// Static Dashboard navigation bridge; no backend, auth, API or agent actions.
-// Loaded only by the explicitly deployed Dashboard HTML hook, not by Mobile.
+// Native Dashboard slot plugin; no auth, API or agent actions.
+// Bundle as classic IIFE for the host's plugin loader; never amend its HTML.
 export function registerMobileNavigation(sdk, registry) {
   if (typeof sdk?.React?.createElement !== 'function' || typeof registry?.registerSlot !== 'function') return false
   const createElement = sdk.React.createElement
@@ -39,15 +39,12 @@ export function registerMobileNavigation(sdk, registry) {
       )
     )
   }
-  registry.registerSlot('neo-mobile-navigation', 'header-banner', MobileChatLink)
+  registry.registerSlot('neo-mobile-web', 'header-banner', MobileChatLink)
+  registry.register?.('neo-mobile-web', () => null)
   return true
 }
 
-// DOMContentLoaded waits for the existing Dashboard module to expose its SDK.
-// No retries, credential lookup, DOM takeover or simulated Electron bridge.
+// The native loader runs after SDK exposure, possibly after DOMContentLoaded.
 if (typeof globalThis.window !== 'undefined') {
-  const boot = () =>
-    registerMobileNavigation(globalThis.window.__HERMES_PLUGIN_SDK__, globalThis.window.__HERMES_PLUGINS__)
-  if (globalThis.document.readyState === 'complete') boot()
-  else globalThis.document.addEventListener('DOMContentLoaded', boot, { once: true })
+  registerMobileNavigation(globalThis.window.__HERMES_PLUGIN_SDK__, globalThis.window.__HERMES_PLUGINS__)
 }

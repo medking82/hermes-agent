@@ -1,0 +1,13 @@
+{
+  "name": "neo-mobile-web",
+  "label": "Mobile Chat",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "api": "plugin_api.py",
+  "tab": {
+    "hidden": true
+  },
+  "slots": [
+    "header-banner"
+  ]
+}

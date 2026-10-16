@@ -44,7 +44,31 @@ The preview proxies only to the existing authenticated dashboard at `127.0.0.1:9
 - The backend cap is25 MiB. The client deliberately limits each photo to20 MiB so base64 history thumbnails fit the existing32 MiB reader budget; at most4 photos and50 MiB total are admitted. Uploads are serialized, carry a60-second cancellation deadline and never automatically retry. Errors remain visible and block Send until the failed item is removed.
 - Uploaded path/name/size metadata is scoped to the local profile/session draft; no photo bytes, data URLs or blob URLs enter localStorage. New-draft → newly created session adoption is limited to the same send/navigation generation. Explicit navigation cancels pending requests; late responses cannot attach to a different conversation. Unknown send ACKs retain refs and require explicit reconciliation, never automatic resubmission. A successful late ACK clears only its own submitted refs even after navigation.
 - Remove cancels/drops the item from the draft and releases its preview. It does not delete an already uploaded server file or retract a message already admitted by the server. Actual image analysis/model interaction and physical iPhone/iPad acceptance remain separate and were not exercised by this implementation.
-- Mobile → management Dashboard targets `/sessions?profile=default`, not terminal `/chat`. The separately approved static Dashboard hook loads `dashboard-link.js` and registers a plain same-tab `/mobile/` exit in the host's existing `header-banner` slot, with a44px touch target. It fails closed without a compatible host and hides on non-default management profiles instead of silently switching scope. Original Dashboard JS/CSS, plugins/configuration and backend remain unchanged; publication pins both original and amended HTML, installs Mobile first, and couples rollback of both entries. An official Dashboard rebuild can overwrite this private HTML hook; it is not an upstream feature.
+- Mobile → management Dashboard targets `/sessions?profile=default`, not terminal `/chat`. The persistent `neo-mobile-web` Dashboard plugin registers a plain same-tab `/mobile/` exit in the host's `header-banner` slot, with a44px touch target. It fails closed without a compatible SDK and hides on non-default management profiles. The native loader requires a classic IIFE; build `public/dashboard-link.js` into `deploy/plugin/dashboard/index.js`. No official Dashboard HTML/JS/CSS is patched.
+
+## Persistent hosting (rebuild-compatible)
+
+The deploy target is `$HERMES_HOME/plugins/neo-mobile-web/`, outside the Hermes installation:
+
+- `dashboard/{manifest.json,index.js,plugin_api.py}`: pinned native Dashboard extension and static router.
+- `releases/v5-<bundle digest>/`: immutable, manifest-verified static bundle.
+- `current`: atomically switched relative symlink to that release.
+
+The existing publisher now refuses legacy `web_dist` plans. Its frozen plan binds the source bundle, installed plugin files and exact target; a changed installed Python/JS plugin requires separate reconciliation, not a silent hot overwrite. Native Python bytecode caches are not treated as source drift. The rollback and source-only tests live in `deploy/`.
+
+The Neo ingress maps only `/mobile/*` to `/api/plugins/neo-mobile-web/site/*` through the same backend. The native cookie gate and enabled-plugin gate remain authoritative. Unauthenticated Mobile requests return to the existing login page; API401 behavior, `/sessions`, `/api`, WebSockets and the AI/Hub virtual hosts are unchanged. Uploaded photos remain under the existing profile image directory, never inside the static release. Dot paths, traversal, symlink escapes and other profiles are rejected by the static router.
+
+Activation explicitly enables this one default-profile plugin while preserving all pre-existing enable/disable entries. The inspected host supports first-request API hot mounting; a newly installed plugin can activate without a gateway/client restart. This does not imply already-imported Python code can be hot-reloaded. Future host/API compatibility still needs verification; this layout prevents official output-directory cleanup from deleting the Mobile payload, not arbitrary future breaking changes. No updater hook, automatic reinstaller or additional service is installed.
+
+Build/test the native entry as well as the Mobile bundle:
+
+```sh
+../../node_modules/.bin/esbuild mobile/public/dashboard-link.js --bundle --format=iife --target=es2022 --outfile=mobile/deploy/plugin/dashboard/index.js
+MOBILE_TEST_RUNTIME=/path/to/intended/hermes-checkout python3 -m unittest discover -s mobile/deploy -p 'test_*.py' -v
+MOBILE_DASHBOARD_FIXTURE_ROOT=/path/to/intended/hermes-checkout/hermes_cli/web_dist ../../node_modules/.bin/playwright test --config playwright.mobile.config.ts
+```
+
+The host integration uses a temporary HOME/profile and a synthetic identity provider. Real native auth/discovery/hot mounting and image-upload code run unchanged, but no real credentials, sessions, inference or tools are invoked. The Dashboard browser regression loads the actual compiled host via its native plugin loader, not an injected HTML hook. Rebuild rehearsal replaces only an isolated official-output copy; it is not a live `hermes update` or service-restart test.
 
 ## Session filter data and scope
 
@@ -105,4 +129,4 @@ Browser fixture responses are conspicuously labelled **测试夹具**. They are 
 
 ## Rollback
 
-Stopping the isolated preview only stops local testing; it does not roll back the deployed site. Production rollback uses the release-specific `maintenance/neo-mobile-fix/deploy/publish.py rollback` on GA401 and `ingress.py rollback` from its verified VPS staging directory. The publisher restores only the pinned prior mobile release; ingress removes only this root redirect while retaining the existing mobile routes. Both refuse foreign drift. Retain the exact reviewed plan/scripts/artifact and their hashes; do not apply a different release's rollback. These test commands do not commit, push or deploy.
+Stopping the isolated preview only stops local testing; it does not roll back the deployed site. Production rollback uses the exact release-specific `publish.py rollback` on GA401 and `ingress.py rollback` in its verified VPS staging directory. The persistent publisher restores the pinned prior `current` symlink (or removes the first installation's entry), retains releases and never touches official Dashboard output. The ingress rollback restores the exact prior configuration, including its root redirect; it does not restore a missing legacy mobile bundle. Restore the original `plugins.enabled` list with `hermes config set` only if it still matches this release's expected value. All steps refuse foreign drift; disable/remove-current is a bounded withdrawal, not a claim that the broken pre-migration site becomes healthy. Retain the exact reviewed plan/scripts/artifact and their hashes; do not apply a different release's rollback. These test commands do not commit, push or deploy.

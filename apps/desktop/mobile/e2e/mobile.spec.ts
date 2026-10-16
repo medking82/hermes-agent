@@ -215,10 +215,7 @@ test('offers a return to mobile chat in the actual Dashboard bundle without star
     }
   })
 
-  const html = (await readFile(path.join(dashboardRoot, 'index.html'), 'utf8')).replace(
-    '</head>',
-    '<script type="module" src="/mobile/dashboard-link.js"></script></head>'
-  )
+  const html = await readFile(path.join(dashboardRoot, 'index.html'), 'utf8')
 
   await page.route('**/*', async route => {
     const url = new URL(route.request().url())
@@ -227,6 +224,10 @@ test('offers a return to mobile chat in the actual Dashboard bundle without star
       writes.push(url.pathname)
     }
 
+    if (url.pathname === '/api/dashboard/plugins') {
+      return route.fulfill({ json: [{ name: 'neo-mobile-web', version: '1.0.0', entry: 'index.js',
+        label: 'Mobile Chat', tab: { hidden: true }, slots: ['header-banner'], has_api: true }] })
+    }
     if (url.pathname.startsWith('/api/')) {
       const body =
         url.pathname === '/api/sessions/stats'
@@ -254,8 +255,8 @@ test('offers a return to mobile chat in the actual Dashboard bundle without star
       return route.fulfill({ contentType: 'text/html', body: '<main>Mobile Chat Fixture</main>' })
     }
 
-    if (url.pathname === '/mobile/dashboard-link.js') {
-      return route.fulfill({ path: path.resolve('mobile/public/dashboard-link.js') })
+    if (url.pathname === '/dashboard-plugins/neo-mobile-web/index.js') {
+      return route.fulfill({ path: path.resolve('mobile/deploy/plugin/dashboard/index.js') })
     }
 
     const file = path.resolve(dashboardRoot, '.' + decodeURIComponent(url.pathname))
