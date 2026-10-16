@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ArrowUp,
   Folder,
+  LayoutDashboard,
   MessageSquare,
   Moon,
   PanelLeft,
@@ -121,6 +122,29 @@ function Brand() {
   )
 }
 
+function DashboardLink({
+  profile,
+  compact = false,
+  onNavigate
+}: {
+  profile: string
+  compact?: boolean
+  onNavigate?: () => void
+}) {
+  return (
+    <a
+      aria-label={tr('返回 Dashboard')}
+      className={`dashboard-return ${compact ? 'mobile-icon' : 'sidebar-dashboard-return'}`}
+      href={`/sessions?profile=${encodeURIComponent(profile)}`}
+      onClick={onNavigate}
+      title={tr('返回 Dashboard')}
+    >
+      <LayoutDashboard aria-hidden="true" size={18} />
+      <span className={compact ? 'sr-only' : undefined}>{tr('返回 Dashboard')}</span>
+    </a>
+  )
+}
+
 function SessionList({
   controller,
   selected,
@@ -183,6 +207,7 @@ function SessionList({
         <Brand />
         <span className="small-tag">{tr('个人空间')}</span>
       </div>
+      <DashboardLink profile={controller.profile} />
       <Button className="new-chat" onClick={onNew} variant="outline">
         <Plus />
         {tr('新对话')}
@@ -767,6 +792,11 @@ export function MobileApp({ controller }: { controller: MobileController }) {
             </div>
           </div>
           <div>
+            <DashboardLink
+              compact
+              onNavigate={() => save(draftScopeRef.current, draftRef.current)}
+              profile={controller.profile}
+            />
             <AppearanceSettings />
             <IconButton label={dark ? tr('切换浅色') : tr('切换深色')} onClick={() => setDark(!dark)}>
               {dark ? <Sun /> : <Moon />}

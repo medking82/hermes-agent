@@ -197,6 +197,44 @@ async function openSession(page: Page) {
   await expect(page.getByRole('status').filter({ hasText: '正在恢复对话' })).toHaveCount(0)
 }
 
+test('returns to the management Dashboard without submitting work', async ({ page }, info) => {
+  const backend = await fixture(page)
+  await page.route('**/sessions?profile=default', route =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: '<main>Fixture Dashboard Destination</main>'
+    })
+  )
+  await page.goto('/mobile/')
+  await openSession(page)
+  const exit = page.locator('.chat-header').getByRole('link', { name: '返回 Dashboard' })
+  await expect(exit).toHaveAttribute('href', '/sessions?profile=default')
+
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 740 })
+    await expect(exit).toBeInViewport()
+    const box = await exit.boundingBox()
+    expect(box!.width).toBeGreaterThanOrEqual(44)
+    expect(box!.height).toBeGreaterThanOrEqual(44)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await expect(page.getByRole('button', { name: '新建对话' })).toBeInViewport()
+  }
+
+  await page.getByRole('button', { name: '新建对话' }).click()
+  await expect(page.locator('.welcome')).toBeVisible()
+  const opener = page.getByRole('button', { name: '打开会话列表' })
+  await opener.click()
+  await expect(
+    page.getByRole('dialog', { name: '会话导航' }).getByRole('link', { name: '返回 Dashboard' })
+  ).toBeVisible()
+  await page.getByRole('button', { name: '关闭会话列表' }).click()
+  await page.screenshot({ path: info.outputPath('dashboard-return.png') })
+  await exit.click()
+  await expect(page).toHaveURL(/\/sessions\?profile=default$/)
+  await expect(page.getByText('Fixture Dashboard Destination')).toBeVisible()
+  expect(backend.submits()).toBe(0)
+})
+
 test('combines session filters without promoting backend leases to running', async ({ page }, info) => {
   const backend = await fixture(page)
   const now = Date.now() / 1000

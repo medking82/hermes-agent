@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { MobileApp } from './app'
 import { MobileController } from './controller'
+import { draftKey } from './input'
 import { setWebLocale } from './localization'
 import { SessionImage } from './session-image'
 import { ToolActivity } from './tool-activity'
@@ -48,6 +49,30 @@ function setup() {
 
   return { controller, rpc, api }
 }
+
+it('offers a same-tab Dashboard exit from a conversation and a new chat without starting work', async () => {
+  const { controller, rpc } = setup()
+  await waitFor(() => expect(controller.getSnapshot().connection).toBe('ready'))
+  await act(async () => {
+    await controller.open('saved')
+  })
+  const editor = screen.getByRole('textbox', { name: '消息' })
+  fireEvent.change(editor, { target: { value: '保留未发送草稿' } })
+  const link = screen.getByRole('link', { name: '返回 Dashboard' })
+  expect(link.getAttribute('href')).toBe('/sessions?profile=default')
+  expect(link.getAttribute('target')).toBeNull()
+  link.addEventListener('click', event => event.preventDefault())
+  fireEvent.click(link)
+  expect(localStorage.getItem(draftKey('default', 'saved'))).toBe('保留未发送草稿')
+  fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+  expect(screen.getByRole('link', { name: '返回 Dashboard' }).getAttribute('href')).toBe('/sessions?profile=default')
+  expect(controller.getSnapshot().conversation).toBeNull()
+  expect(
+    rpc.request.mock.calls.filter(call => ['prompt.submit', 'session.create', 'session.interrupt'].includes(call[0]))
+      .length
+  ).toBe(0)
+  controller.dispose()
+})
 
 it('labels saved-history updates honestly instead of promising a desktop token mirror', async () => {
   const { controller } = setup()

@@ -74,6 +74,7 @@
 }
 @media (max-height: 740px) {
   .session-list:has(.session-filters[open]) .sidebar-brand,
+  .session-list:has(.session-filters[open]) > .sidebar-dashboard-return,
   .session-list:has(.session-filters[open]) > .new-chat {
     display: none;
   }

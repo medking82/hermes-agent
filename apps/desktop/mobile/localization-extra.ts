@@ -1,6 +1,7 @@
 // Mobile-only copy. Existing Desktop labels are resolved from its shipped catalogs first.
 // Other locales fall back to English for mobile-specific explanations, never raw key names.
 export const mobileEnglish: Record<string, string> = {
+  '返回 Dashboard': 'Back To Dashboard',
   '试试调整筛选，或加载更早的会话。': 'Adjust Filters Or Load Earlier Sessions.',
   已载入范围: 'Loaded Scope',
   更多筛选: 'More Filters',
