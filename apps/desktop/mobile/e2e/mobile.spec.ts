@@ -197,6 +197,122 @@ async function openSession(page: Page) {
   await expect(page.getByRole('status').filter({ hasText: '正在恢复对话' })).toHaveCount(0)
 }
 
+test('combines session filters without promoting backend leases to running', async ({ page }, info) => {
+  const backend = await fixture(page)
+  const now = Date.now() / 1000
+
+  const rows = [
+    {
+      id: 'fixture-session',
+      title: '测试夹具 · 筛选目标',
+      cwd: '/fixture/mobile',
+      source: 'desktop',
+      last_active: now
+    },
+    {
+      id: 'fixture-elsewhere',
+      title: '测试夹具 · 仅后端连接',
+      cwd: '/fixture/mobile',
+      source: 'desktop',
+      last_active: now,
+      live_lease: true
+    },
+    { id: 'other-project', title: '测试夹具 · 其他项目', cwd: '/fixture/other', source: 'desktop', last_active: now },
+    { id: 'cli-session', title: '测试夹具 · CLI来源', cwd: '/fixture/mobile', source: 'cli', last_active: now },
+    {
+      id: 'old-session',
+      title: '测试夹具 · 较早会话',
+      cwd: '/fixture/mobile',
+      source: 'desktop',
+      last_active: now - 40 * 86400
+    }
+  ]
+
+  const metadataReads: string[] = []
+  await page.route('**/api/sessions?*', route => route.fulfill({ json: { sessions: rows, total: rows.length } }))
+  await page.route('**/api/sessions/search?*', route =>
+    route.fulfill({
+      json: {
+        results: rows.map(({ cwd: _cwd, live_lease: _lease, ...row }) => ({
+          ...row,
+          session_id: row.id,
+          snippet: '测试夹具 needle'
+        }))
+      }
+    })
+  )
+
+  for (const row of rows) {
+    await page.route(`**/api/sessions/${row.id}?*`, route => {
+      metadataReads.push(row.id)
+
+      return route.fulfill({ json: row })
+    })
+  }
+
+  await page.goto('/mobile/')
+  const opener = page.getByRole('button', { name: '打开会话列表' })
+
+  if (await opener.isVisible()) {
+    await opener.click()
+  }
+
+  await page.getByLabel('按项目筛选').selectOption('/fixture/mobile')
+  await page.getByRole('searchbox', { name: '搜索会话' }).fill('needle')
+  await expect.poll(() => new Set(metadataReads).size).toBe(5)
+  await expect(page.getByLabel('按项目筛选')).toBeVisible()
+  await page.locator('.session-filters > summary').click()
+  await page.getByLabel('按来源筛选').selectOption('source:desktop')
+  await page.getByLabel('按时间筛选').selectOption('today')
+  await page.getByLabel('按状态筛选').selectOption('working')
+  const list = page.locator('.session-scroll')
+  await expect(list.getByRole('button', { name: /筛选目标/ })).toBeVisible()
+  await expect(list.locator('.session-row')).toHaveCount(1)
+  await expect(list.getByText('测试夹具 · 仅后端连接')).toHaveCount(0)
+  await page.getByRole('button', { name: '清除筛选' }).click()
+  await expect(page.getByRole('searchbox', { name: '搜索会话' })).toHaveValue('needle')
+  await expect(list.locator('.session-row')).toHaveCount(5)
+  await page.getByRole('searchbox', { name: '搜索会话' }).fill('')
+  await expect(page.getByRole('status', { name: '后端已连接；运行状态未知' })).toHaveCount(1)
+  await page.getByLabel('按状态筛选').selectOption('leased')
+  await expect(list.getByText('测试夹具 · 仅后端连接')).toBeVisible()
+  await expect(list.locator('.session-row')).toHaveCount(1)
+  await expect(page.getByRole('status', { name: '会话运行中' })).toHaveCount(0)
+
+  await expect.poll(() => list.evaluate(node => node.clientHeight)).toBeGreaterThanOrEqual(96)
+  await expect(list.getByText('测试夹具 · 仅后端连接')).toBeInViewport()
+
+  const geometry = await page
+    .locator('.session-filters')
+    .evaluate(node => ({ width: node.clientWidth, scrollWidth: node.scrollWidth }))
+
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width + 1)
+  const touch = await page.getByLabel('按状态筛选').boundingBox()
+  expect(touch?.height).toBeGreaterThanOrEqual(44)
+  await page.screenshot({ path: `mobile/test-results/session-filters-${info.project.name}.png`, fullPage: true })
+  await page.getByRole('button', { name: '清除筛选' }).click()
+  await expect(page.getByRole('searchbox', { name: '搜索会话' })).toHaveValue('')
+  await expect(list.locator('.session-row')).toHaveCount(5)
+  expect(backend.submits()).toBe(0)
+  await page.setViewportSize({ width: 568, height: 360 })
+  await expect(page.locator('#web-session-sidebar')).toHaveCount(0)
+
+  if (!(await page.getByRole('dialog', { name: '会话导航' }).isVisible())) {
+    await opener.click()
+  }
+
+  const panel = page.locator('.session-filters')
+
+  if (!(await panel.evaluate(node => (node as HTMLDetailsElement).open))) {
+    await panel.locator('summary').click()
+  }
+
+  await expect.poll(() => list.evaluate(node => node.clientHeight)).toBeGreaterThanOrEqual(96)
+  await list.locator('.session-row').first().scrollIntoViewIfNeeded()
+  await expect(list.locator('.session-row').first()).toBeInViewport()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
 test('renders stored uploads through same-origin media and opens the Desktop image lightbox', async ({
   page
 }, info) => {
@@ -863,6 +979,79 @@ test('full-range glass keeps text opaque with independent backdrop blur and rese
   await writeFile(info.outputPath('glass-evidence.json'), JSON.stringify(result, null, 2))
 })
 
+test('uses Desktop typography tokens with UI-base and chat-only scaling', async ({ page }, info) => {
+  await fixture(page, false, true)
+  await page.goto('/mobile/')
+  await openSession(page)
+
+  const sizes = () =>
+    page.evaluate(() => {
+      const native = document.createElement('div')
+      native.dataset.slot = 'aui_thread-content'
+      native.style.setProperty(
+        '--chat-text-scale',
+        document.documentElement.style.getPropertyValue('--web-chat-text-scale')
+      )
+      const paragraph = document.createElement('p')
+      paragraph.dataset.slot = 'aui_assistant-message-content'
+      native.append(paragraph)
+      const ui = document.createElement('span')
+      ui.style.fontSize = '0.8125rem'
+      native.append(ui)
+      document.body.append(native)
+      const size = (node: Element) => parseFloat(getComputedStyle(node).fontSize)
+
+      const result = {
+        native: size(paragraph),
+        nativeLineHeight: parseFloat(getComputedStyle(paragraph).lineHeight),
+        assistantLineHeight: parseFloat(
+          getComputedStyle(document.querySelector('.message.assistant .message-text p')!).lineHeight
+        ),
+        ui: size(ui),
+        assistant: size(document.querySelector('.message.assistant .message-text p')!),
+        user: size(document.querySelector('.message.user .message-text')!),
+        composer: size(document.querySelector('.composer textarea')!),
+        header: size(document.querySelector('.header-title strong')!),
+        coarse: matchMedia('(pointer: coarse)').matches,
+        code: [...document.querySelectorAll('.message.assistant .message-text code')].map(size),
+        table: [...document.querySelectorAll('.message.assistant .message-text table')].map(size)
+      }
+
+      native.remove()
+
+      return result
+    })
+
+  const before = await sizes()
+  expect(before.assistant).toBeCloseTo(before.native, 2)
+  expect(before.assistantLineHeight).toBeCloseTo(before.nativeLineHeight, 2)
+  expect(before.user).toBeCloseTo(before.native, 2)
+  expect(before.composer).toBeCloseTo(before.coarse ? Math.max(16, before.native) : before.native, 2)
+  expect(before.header).toBeCloseTo(before.ui, 2)
+  await page.screenshot({ path: `mobile/test-results/typography-default-${info.project.name}.png`, fullPage: true })
+  await page.getByRole('button', { name: '外观设置' }).click()
+  await page.getByRole('tab', { name: '字体与字号', exact: true }).click()
+  await page.locator('#mobile-ui-text-scale').selectOption('125')
+  const scaledUi = await sizes()
+  expect(scaledUi.assistant / before.assistant).toBeCloseTo(1.25, 2)
+  expect(scaledUi.user / before.user).toBeCloseTo(1.25, 2)
+  expect(scaledUi.header / before.header).toBeCloseTo(1.25, 2)
+  await page.locator('#mobile-chat-text-scale').selectOption('150')
+  const scaledChat = await sizes()
+  expect(scaledChat.header).toBeCloseTo(scaledUi.header, 2)
+  expect(scaledChat.assistant).toBeCloseTo(scaledChat.native, 2)
+  expect(scaledChat.user).toBeCloseTo(scaledChat.native, 2)
+  expect(scaledChat.composer).toBeCloseTo(scaledChat.coarse ? Math.max(16, scaledChat.native) : scaledChat.native, 2)
+  expect(scaledChat.code.every((size, i) => size > scaledUi.code[i])).toBe(true)
+  expect(scaledChat.table.every((size, i) => size > scaledUi.table[i])).toBe(true)
+  await writeFile(
+    info.outputPath('typography-evidence.json'),
+    JSON.stringify({ before, scaledUi, scaledChat }, null, 2)
+  )
+  await page.getByRole('button', { name: '完成', exact: true }).click()
+  await page.screenshot({ path: `mobile/test-results/typography-${info.project.name}.png`, fullPage: true })
+})
+
 test('appearance groups show theme swatches font samples and persistent reachable actions', async ({ page }, info) => {
   const backend = await fixture(page, false, true)
   await page.addInitScript(() => localStorage.setItem('hermes-web:appearance', 'dark'))
@@ -907,8 +1096,9 @@ test('appearance groups show theme swatches font samples and persistent reachabl
         .first()
         .evaluate(node => parseFloat(getComputedStyle(node).fontSize))
     )
-    .toBe(before)
-  expect(await chatSizes()).toEqual(beforeSizes)
+    .toBeCloseTo(before * 1.75, 2)
+  const uiScaledSizes = await chatSizes()
+  uiScaledSizes.forEach((size, index) => expect(size / beforeSizes[index]).toBeCloseTo(1.75, 2))
   await page.locator('#mobile-chat-text-scale').selectOption('150')
   await expect
     .poll(() =>

@@ -10,6 +10,7 @@ export interface SessionRow {
   id: string
   live_status?: LiveStatus
   live_lease?: boolean
+  source?: string | null
   title?: string | null
   preview?: string
   cwd?: string | null
@@ -25,6 +26,10 @@ export interface MobileState {
   total: number
   hasMoreSessions: boolean
   listLoading: boolean
+  filterProjects: string[]
+  filterSources: string[]
+  searchLimitReached: boolean
+  searchMetadataIncomplete: boolean
   listError?: string
   opening: boolean
   sending: boolean
@@ -42,6 +47,10 @@ export class MobileController {
     total: 0,
     hasMoreSessions: false,
     listLoading: false,
+    filterProjects: [],
+    filterSources: [],
+    searchLimitReached: false,
+    searchMetadataIncomplete: false,
     opening: false,
     sending: false,
     conversation: null,
@@ -60,6 +69,7 @@ export class MobileController {
   private savedOffset = 0
   private listQuery = ''
   private savedQuery = ''
+  private searchProjectMetadata = false
   private changeTimer?: ReturnType<typeof setTimeout>
   private savedVersion?: { storedId: string; stamp: string; fetchedAt: number }
   private connecting = false
@@ -108,11 +118,13 @@ export class MobileController {
         // A real transport replacement enters connecting before attach, even if the old
         // socket's close event is still queued. Healthy connect() reuse emits no transition.
         if (status === 'connecting') {
-          this.update({ controls: [] })
+          this.liveGeneration++
+          this.update({ connection: 'connecting', controls: [], sessions: this.savedRows })
         }
 
         if ((status === 'closed' || status === 'error') && !this.disposed) {
-          this.update({ connection: 'offline', controls: [] })
+          this.liveGeneration++
+          this.update({ connection: 'offline', controls: [], sessions: this.savedRows })
           this.scheduleReconnect()
         }
       }),
@@ -289,20 +301,40 @@ export class MobileController {
 
       this.update({ sessions: [...merged, ...extra] })
     } catch {
-      /* Live status is best-effort; the saved list stays authoritative. */
+      // Failed refresh is missing evidence, not permission to retain an old working badge.
+      if (generation === this.liveGeneration && !this.disposed) {
+        this.update({ sessions: this.savedRows.map(row => ({ ...row, live_status: undefined })) })
+      }
     }
   }
-  async loadSessions(query = this.listQuery, more = false) {
+  private filterOptions(rows: SessionRow[]) {
+    return {
+      filterProjects: [
+        ...new Set([
+          ...this.state.filterProjects,
+          ...rows.map(row => row.git_repo_root || row.cwd).filter((path): path is string => Boolean(path))
+        ])
+      ].sort(),
+      filterSources: [
+        ...new Set([
+          ...this.state.filterSources,
+          ...rows.map(row => row.source).filter((source): source is string => Boolean(source))
+        ])
+      ].sort()
+    }
+  }
+  async loadSessions(query = this.listQuery, more = false, searchProjectMetadata = this.searchProjectMetadata) {
     const generation = ++this.listGeneration
     this.listQuery = query
+    this.searchProjectMetadata = searchProjectMetadata
     const offset = more ? this.savedOffset : 0
     this.update({ listLoading: true, listError: undefined })
 
     try {
       if (query.trim()) {
         const result = await this.api.request<{
-          results: Array<{ session_id: string; title?: string; snippet: string; model?: string; last_active?: number }>
-        }>(`/api/sessions/search?q=${encodeURIComponent(query)}&profile=${this.profile}`)
+          results: Array<SessionRow & { session_id: string; snippet: string; session_started?: number }>
+        }>(`/api/sessions/search?q=${encodeURIComponent(query)}&profile=${this.profile}&limit=100`)
 
         if (generation !== this.listGeneration) {
           return
@@ -310,23 +342,84 @@ export class MobileController {
 
         const rows = [
           ...new Map(
-            result.results.map(r => [
+            result.results.slice(0, 100).map(r => [
               r.session_id,
               {
                 id: r.session_id,
                 title: r.title,
                 preview: r.snippet.replace(/<[^>]*>/g, ''),
                 model: r.model,
-                last_active: r.last_active
+                last_active: r.last_active ?? r.session_started ?? r.started_at,
+                started_at: r.started_at ?? r.session_started,
+                cwd: r.cwd,
+                git_repo_root: r.git_repo_root,
+                source: r.source,
+                live_lease: r.live_lease
               }
             ])
           ).values()
         ]
 
+        let metadataIncomplete = false
+
+        if (searchProjectMetadata) {
+          let cursor = 0
+          let stopped = false
+
+          const hydrate = async () => {
+            while (cursor < rows.length && generation === this.listGeneration && !this.disposed && !stopped) {
+              const row = rows[cursor++]
+
+              if (row.cwd !== undefined || row.git_repo_root !== undefined) {
+                continue
+              }
+
+              try {
+                const metadata = await this.api.request<SessionRow>(
+                  `/api/sessions/${encodeURIComponent(row.id)}?profile=${this.profile}`
+                )
+
+                if (metadata.id !== row.id) {
+                  metadataIncomplete = true
+
+                  continue
+                }
+
+                // Only public filter metadata is retained, never prompts/config/messages.
+                row.cwd = metadata.cwd ?? null
+                row.git_repo_root = metadata.git_repo_root ?? null
+                row.source ??= metadata.source
+                row.last_active ??= metadata.last_active
+                row.started_at ??= metadata.started_at
+              } catch (error) {
+                if (error instanceof SignInRequired) {
+                  stopped = true
+                  throw error
+                }
+
+                metadataIncomplete = true
+              }
+            }
+          }
+
+          await Promise.all(Array.from({ length: Math.min(4, rows.length) }, hydrate))
+
+          if (generation !== this.listGeneration || this.disposed) {
+            return
+          }
+        }
+
         this.savedQuery = query
         this.savedRows = rows
         this.savedOffset = rows.length
-        this.update({ sessions: rows, total: rows.length, hasMoreSessions: false })
+        this.update({
+          ...this.filterOptions(rows),
+          sessions: rows,
+          total: rows.length,
+          hasMoreSessions: false,
+          searchLimitReached: result.results.length >= 100,
+          searchMetadataIncomplete: metadataIncomplete
+        })
       } else {
         const result = await this.api.request<{ sessions: SessionRow[]; total: number }>(
           `/api/sessions?profile=${this.profile}&limit=40&offset=${offset}&min_messages=0&archived=exclude&order=recent`
@@ -342,6 +435,9 @@ export class MobileController {
         ]
         this.savedOffset = offset + result.sessions.length
         this.update({
+          ...this.filterOptions(this.savedRows),
+          searchLimitReached: false,
+          searchMetadataIncomplete: false,
           sessions: this.savedRows,
           total: result.total,
           hasMoreSessions: result.sessions.length > 0 && this.savedOffset < result.total

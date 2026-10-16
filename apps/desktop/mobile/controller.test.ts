@@ -150,6 +150,180 @@ it('refreshes active status once per connect wake and change even if saved loadi
   }
 })
 
+it('preserves source and time and hydrates search project metadata without reading messages or resuming', async () => {
+  const { controller, api, rpc } = setup()
+  api.request.mockImplementation(async path =>
+    path.includes('/search?')
+      ? {
+          results: [
+            { session_id: 'hit', title: 'needle', snippet: '<b>found</b>', source: 'desktop', last_active: 123 }
+          ]
+        }
+      : {
+          id: 'hit',
+          cwd: '/repo',
+          git_repo_root: '/repo',
+          source: 'cli',
+          last_active: 1,
+          system_prompt: 'DO_NOT_RETAIN',
+          model_config: { private: true }
+        }
+  )
+  rpc.request.mockResolvedValue({ sessions: [] } as never)
+
+  try {
+    await controller.loadSessions('needle', false, true)
+    expect(api.request.mock.calls[0][0]).toContain('limit=100')
+    expect(controller.getSnapshot().sessions[0]).toMatchObject({
+      id: 'hit',
+      cwd: '/repo',
+      source: 'desktop',
+      last_active: 123,
+      preview: 'found'
+    })
+    expect(controller.getSnapshot().sessions[0]).not.toHaveProperty('system_prompt')
+    expect(controller.getSnapshot().sessions[0]).not.toHaveProperty('model_config')
+    expect(controller.getSnapshot().filterProjects).toContain('/repo')
+    expect(controller.getSnapshot().searchMetadataIncomplete).toBe(false)
+    expect(api.request.mock.calls.some(([path]) => path.includes('/messages'))).toBe(false)
+    expect(rpc.request.mock.calls.some(([method]) => method === 'session.resume')).toBe(false)
+  } finally {
+    controller.dispose()
+  }
+})
+
+it('drops runtime evidence if a live-status refresh fails instead of preserving working markers', async () => {
+  const { controller, api, rpc } = setup()
+  api.request.mockResolvedValue({ sessions: [{ id: 'saved', live_lease: true }], total: 1 })
+  rpc.request.mockResolvedValue({
+    sessions: [
+      { id: 'a', session_key: 'saved', status: 'working' },
+      { id: 'b', session_key: 'extra', status: 'working' }
+    ]
+  } as never)
+
+  try {
+    await controller.connect()
+    await controller.loadLiveSessions()
+    expect(controller.getSnapshot().sessions[0].live_status).toBe('working')
+    rpc.request.mockRejectedValueOnce(new Error('runtime unavailable'))
+    await controller.loadLiveSessions()
+    expect(controller.getSnapshot().sessions.map(row => row.id)).toEqual(['saved'])
+    expect(controller.getSnapshot().sessions[0].live_status).toBeUndefined()
+    expect(controller.getSnapshot().sessions[0].live_lease).toBe(true)
+  } finally {
+    controller.dispose()
+  }
+})
+
+it('does not resurrect pre-disconnect running evidence while reconnect status is pending', async () => {
+  const { controller, api, rpc, close } = setup()
+  api.request.mockResolvedValue({ sessions: [{ id: 'saved' }], total: 1 })
+  rpc.request.mockResolvedValue({ sessions: [{ id: 'a', session_key: 'saved', status: 'working' }] } as never)
+
+  try {
+    await controller.connect()
+    await controller.loadLiveSessions()
+    expect(controller.getSnapshot().sessions[0].live_status).toBe('working')
+    close('closed')
+    expect(controller.getSnapshot().sessions[0].live_status).toBeUndefined()
+    let resolve!: (value: unknown) => void
+    rpc.request.mockImplementation(
+      () =>
+        new Promise(done => {
+          resolve = done
+        })
+    )
+    await controller.connect()
+    expect(controller.getSnapshot().connection).toBe('ready')
+    expect(controller.getSnapshot().sessions[0].live_status).toBeUndefined()
+    resolve({ sessions: [{ id: 'a', session_key: 'saved', status: 'idle' }] })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(controller.getSnapshot().sessions[0].live_status).toBe('idle')
+  } finally {
+    controller.dispose()
+  }
+})
+
+it('bounds project metadata hydration to four reads and discards a superseded search', async () => {
+  const { controller, api, rpc } = setup()
+  const pending: Array<(value: unknown) => void> = []
+  const reads: string[] = []
+  api.request.mockImplementation(async path => {
+    if (path.includes('/search?')) {
+      return { results: Array.from({ length: 100 }, (_, i) => ({ session_id: `hit-${i}`, snippet: 'old' })) }
+    }
+
+    if (path.startsWith('/api/sessions?')) {
+      return { sessions: [{ id: 'new-list' }], total: 1 }
+    }
+
+    reads.push(path)
+
+    return new Promise(resolve => pending.push(resolve))
+  })
+  rpc.request.mockResolvedValue({ sessions: [] } as never)
+
+  try {
+    const old = controller.loadSessions('old', false, true)
+    await vi.waitFor(() => expect(reads).toHaveLength(4))
+    await controller.loadSessions('', false, false)
+    pending.forEach((resolve, i) => resolve({ id: `hit-${i}`, cwd: '/old-project' }))
+    await old
+    expect(reads).toHaveLength(4)
+    expect(controller.getSnapshot().sessions.map(row => row.id)).toEqual(['new-list'])
+    expect(controller.getSnapshot().filterProjects).not.toContain('/old-project')
+  } finally {
+    controller.dispose()
+  }
+})
+
+it('reports incomplete project metadata without inventing paths or dropping keyword results', async () => {
+  const { controller, api, rpc } = setup()
+  api.request.mockImplementation(async path => {
+    if (path.includes('/search?')) {
+      return { results: [{ session_id: 'hit', snippet: 'needle', source: 'telegram', session_started: 123 }] }
+    }
+
+    throw new Error('metadata unavailable')
+  })
+  rpc.request.mockResolvedValue({ sessions: [] } as never)
+
+  try {
+    await controller.loadSessions('needle', false, true)
+    expect(controller.getSnapshot().searchMetadataIncomplete).toBe(true)
+    expect(controller.getSnapshot().sessions).toHaveLength(1)
+    expect(controller.getSnapshot().sessions[0]).toMatchObject({
+      source: 'telegram',
+      started_at: 123,
+      last_active: 123
+    })
+    expect(controller.getSnapshot().sessions[0].cwd).toBeUndefined()
+    expect(controller.getSnapshot().filterProjects).toEqual([])
+  } finally {
+    controller.dispose()
+  }
+})
+
+it('caps search results at100 and exposes that the result set may be truncated', async () => {
+  const { controller, api, rpc } = setup()
+  api.request.mockResolvedValue({
+    results: Array.from({ length: 101 }, (_, i) => ({ session_id: `hit-${i}`, snippet: 'hit', source: 'cli' }))
+  })
+  rpc.request.mockResolvedValue({ sessions: [] } as never)
+
+  try {
+    await controller.loadSessions('needle')
+    expect(controller.getSnapshot().sessions).toHaveLength(100)
+    expect(controller.getSnapshot().searchLimitReached).toBe(true)
+    expect(api.request).toHaveBeenCalledTimes(1)
+    expect(controller.getSnapshot().filterSources).toEqual(['cli'])
+  } finally {
+    controller.dispose()
+  }
+})
+
 it('clears removed live markers and removes unsaved live-only rows', async () => {
   const { controller, api, rpc } = setup()
   api.request.mockResolvedValue({ sessions: [{ id: 'saved', title: 'Saved' }], total: 1 })

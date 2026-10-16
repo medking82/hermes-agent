@@ -8,8 +8,8 @@ export const WEB_THEMES = BUILTIN_THEMES
 // Desktop's appearance/typography presets; values here are browser-local text sizing, not Electron zoom.
 export const TEXT_SCALE_PRESETS = [90, 100, 110, 125, 150, 175] as const
 
-function textScale(value: unknown): number {
-  return typeof value === 'number' && TEXT_SCALE_PRESETS.some(preset => preset === value) ? value : 100
+function textScale(value: unknown, fallback = 100): number {
+  return typeof value === 'number' && TEXT_SCALE_PRESETS.some(preset => preset === value) ? value : fallback
 }
 
 export interface VisualPreferences {
@@ -34,7 +34,7 @@ export function readVisualPreferences(raw: string | null): VisualPreferences {
     backdropStrength: 2.5,
     blur: 12,
     uiTextScale: 100,
-    chatTextScale: 100
+    chatTextScale: 110
   }
 
   let value: unknown
@@ -69,7 +69,7 @@ export function readVisualPreferences(raw: string | null): VisualPreferences {
         : defaults.blur,
     font: typeof item.font === 'string' && CHAT_FONT_SUGGESTIONS.some(font => font === item.font) ? item.font : '',
     uiTextScale: textScale(item.uiTextScale),
-    chatTextScale: textScale(item.chatTextScale)
+    chatTextScale: textScale(item.chatTextScale, defaults.chatTextScale)
   }
 }
 

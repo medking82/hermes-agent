@@ -32,8 +32,9 @@ import { AppearanceSettings } from './appearance-settings'
 import type { MobileController } from './controller'
 import { type SessionRow } from './controller'
 import type { Message } from './conversation'
-import { draftKey, projectMatches, shouldSubmitKey, viewportGeometry } from './input'
+import { draftKey, shouldSubmitKey, viewportGeometry } from './input'
 import { getWebLocale, syncDocumentLocale, tr, useWebLocale } from './localization'
+import { matchesSession, runtimeStatus, type SessionFilters } from './session-filters'
 import { SessionImage } from './session-image'
 import { ResizableSidebar, useNavigationCollapsed } from './sidebar'
 import { TaskPanel } from './task-panel'
@@ -134,16 +135,47 @@ function SessionList({
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const [query, setQuery] = useState('')
   const [project, setProject] = useState('')
+  const [status, setStatus] = useState<SessionFilters['status']>('all')
+  const [source, setSource] = useState('all')
+  const [time, setTime] = useState<SessionFilters['time']>('all')
+  const [now, setNow] = useState(Date.now)
+  const needsProjectMetadata = Boolean(query.trim() && project)
+  useEffect(() => {
+    if (time === 'all') {
+      return
+    }
+
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 60_000)
+
+    return () => clearInterval(timer)
+  }, [time])
   const input = useRef<HTMLInputElement>(null)
   useEffect(() => {
     const timer = setTimeout(() => {
-      void controller.loadSessions(query)
+      void controller.loadSessions(query, false, needsProjectMetadata)
     }, 250)
 
     return () => clearTimeout(timer)
-  }, [controller, query])
-  const projects = [...new Set(state.sessions.map(row => row.git_repo_root || row.cwd).filter(Boolean))] as string[]
-  const rows = state.sessions.filter(row => projectMatches(project, query, row.git_repo_root || row.cwd))
+  }, [controller, query, needsProjectMetadata])
+  const projects = state.filterProjects
+
+  const rows = state.sessions.filter(row =>
+    matchesSession(row, { project, status, source, time }, state.connection, now)
+  )
+
+  const activeFilters = [project !== '', status !== 'all', source !== 'all', time !== 'all'].filter(Boolean).length
+
+  const sourceName = (value: string) =>
+    ({
+      desktop: tr('Desktop／Web（记录来源）'),
+      cli: 'CLI',
+      telegram: 'Telegram',
+      discord: 'Discord',
+      slack: 'Slack',
+      web: 'Web',
+      cron: tr('定时任务')
+    })[value] || value
 
   return (
     <div className="session-list">
@@ -182,18 +214,95 @@ function SessionList({
           <RefreshCw className={state.listLoading ? 'spin' : ''} />
         </IconButton>
       </div>
-      {projects.length > 0 && !query && (
-        <label className="project-filter">
-          <Folder aria-hidden="true" size={15} />
-          <select aria-label={tr('按项目筛选')} onChange={e => setProject(e.target.value)} value={project}>
-            <option value="">{tr('所有项目')}</option>
-            {projects.map(path => (
-              <option key={path} value={path}>
-                {projectName(path)}
-              </option>
-            ))}
-          </select>
-        </label>
+      <label className="project-filter">
+        <Folder aria-hidden="true" size={15} />
+        <select aria-label={tr('按项目筛选')} onChange={e => setProject(e.target.value)} value={project}>
+          <option value="">{tr('所有项目')}</option>
+          <option value="__none__">{tr('未记录项目')}</option>
+          {projects.map(path => (
+            <option key={path} value={path}>
+              {projectName(path)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <details className="session-filters">
+        <summary>
+          {tr('更多筛选')}
+          {activeFilters > 0 && <span className="filter-count">{activeFilters}</span>}
+        </summary>
+        <div className="filter-grid">
+          <label>
+            {tr('状态')}
+            <select
+              aria-label={tr('按状态筛选')}
+              onChange={event => setStatus(event.target.value as SessionFilters['status'])}
+              value={status}
+            >
+              <option value="all">{tr('全部状态')}</option>
+              <option value="working">{tr('会话运行中')}</option>
+              <option value="waiting">{tr('需要你输入')}</option>
+              <option value="starting">{tr('正在启动')}</option>
+              <option value="idle">{tr('已确认空闲')}</option>
+              <option value="unknown">{tr('运行状态未知')}</option>
+              <option value="leased">{tr('后端已连接；运行状态未知')}</option>
+            </select>
+          </label>
+          <label>
+            {tr('来源')}
+            <select aria-label={tr('按来源筛选')} onChange={event => setSource(event.target.value)} value={source}>
+              <option value="all">{tr('全部来源')}</option>
+              <option value="unknown">{tr('未记录来源')}</option>
+              {state.filterSources.map(value => (
+                <option key={value} value={`source:${value}`}>
+                  {sourceName(value)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            {tr('最近活动时间')}
+            <select
+              aria-label={tr('按时间筛选')}
+              onChange={event => setTime(event.target.value as SessionFilters['time'])}
+              value={time}
+            >
+              <option value="all">{tr('全部时间')}</option>
+              <option value="today">{tr('今天')}</option>
+              <option value="week">{tr('最近 7 天')}</option>
+              <option value="month">{tr('最近 30 天')}</option>
+            </select>
+          </label>
+        </div>
+        <p className="filter-help">{tr('来源表示创建渠道；状态未知不等于空闲。时间按本机时区。')}</p>
+        <p className="filter-help">{tr('项目与来源选项来自已载入的元数据。')}</p>
+        {activeFilters > 0 && (
+          <Button
+            onClick={() => {
+              setProject('')
+              setStatus('all')
+              setSource('all')
+              setTime('all')
+            }}
+            variant="text"
+          >
+            {tr('清除筛选')}
+          </Button>
+        )}
+        <p className="filter-help">
+          {query.trim()
+            ? tr('搜索最多返回 100 条；不是全库筛选总数。')
+            : tr('筛选已载入会话；加载更早会话可扩大范围。')}
+        </p>
+      </details>
+      <p className="filter-scope" role="status">
+        {tr('当前匹配')} {rows.length} / {state.sessions.length} · {tr('已载入范围')}
+      </p>
+      {state.searchLimitReached && <p className="filter-help">{tr('已达到搜索上限，请缩小关键词。')}</p>}
+      {state.searchMetadataIncomplete && (
+        <p className="filter-help" role="alert">
+          {tr('部分项目元数据未能读取，项目筛选可能不完整；请刷新重试。')}
+        </p>
       )}
       <div aria-busy={state.listLoading} className="session-scroll">
         {state.listError && (
@@ -214,8 +323,14 @@ function SessionList({
         {!state.listError && !state.listLoading && !rows.length && (
           <div className="list-empty">
             <MessageSquare />
-            {query ? tr('没有找到匹配的对话') : tr('这里是你的对话记录')}
-            <span>{query ? tr('试试标题或对话中的关键词') : tr('开始一段对话，随时从这里接着聊。')}</span>
+            {query || activeFilters ? tr('没有找到匹配的对话') : tr('这里是你的对话记录')}
+            <span>
+              {activeFilters
+                ? tr('试试调整筛选，或加载更早的会话。')
+                : query
+                  ? tr('试试标题或对话中的关键词')
+                  : tr('开始一段对话，随时从这里接着聊。')}
+            </span>
           </div>
         )}
         {rows.map(row => (
@@ -226,7 +341,7 @@ function SessionList({
             onClick={() => onOpen(row)}
           >
             <div className="session-row-top">
-              {row.live_status && row.live_status !== 'idle' ? (
+              {runtimeStatus(row, state.connection) !== 'unknown' && row.live_status !== 'idle' ? (
                 <span
                   aria-label={
                     row.live_status === 'waiting'
@@ -245,7 +360,7 @@ function SessionList({
                         : tr('会话运行中')
                   }
                 />
-              ) : row.live_lease ? (
+              ) : row.live_lease && runtimeStatus(row, state.connection) === 'unknown' ? (
                 <span
                   aria-label={tr('后端已连接；运行状态未知')}
                   className="session-live-dot leased"
@@ -253,7 +368,7 @@ function SessionList({
                   title={tr('后端已连接；运行状态未知')}
                 />
               ) : null}
-              <span>{row.title || row.preview || tr('未命名对话')}</span>
+              <span className="session-row-title">{row.title || row.preview || tr('未命名对话')}</span>
               <span>{relativeTime(row.last_active || row.started_at)}</span>
             </div>
             <div className="session-row-detail">

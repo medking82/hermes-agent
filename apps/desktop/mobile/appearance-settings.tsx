@@ -136,7 +136,9 @@ export function AppearanceSettings() {
                       </div>
                     ))}
                   </div>
-                  <p className="settings-note">{tr('界面与聊天字号独立；不改变浏览器或 Desktop 缩放。')}</p>
+                  <p className="settings-note">
+                    {tr('界面字号是基础，聊天字号额外缩放消息与输入区；不改变浏览器或 Desktop 窗口缩放。')}
+                  </p>
                   <div className="appearance-field">
                     <label htmlFor="mobile-font">{tr('字体')}</label>
                     <Select

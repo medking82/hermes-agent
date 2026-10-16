@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 
 import { resolveChatFontFamily } from '../src/themes/chat-font'
 import { renderedModeFor } from '../src/themes/palette'
-import { DEFAULT_TYPOGRAPHY } from '../src/themes/presets'
+import { DEFAULT_TYPOGRAPHY, nousTheme } from '../src/themes/presets'
 
 import { MobileApp } from './app'
 import { paletteForPreferences, readVisualPreferences, VISUAL_KEY, WEB_THEMES } from './appearance'
@@ -29,7 +29,7 @@ function applyPalette() {
   const mode = root.dataset.mobileAppearance ?? storedMode
   const dark = mode === 'dark' || (mode !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)
   const colors = paletteForPreferences(preferences, dark)
-  const typography = { ...DEFAULT_TYPOGRAPHY, ...WEB_THEMES[preferences.skin].typography }
+  const typography = { ...DEFAULT_TYPOGRAPHY, ...nousTheme.typography, ...WEB_THEMES[preferences.skin].typography }
   const rendered = renderedModeFor(colors, dark ? 'dark' : 'light')
   root.dataset.hermesTheme = preferences.skin
   root.dataset.hermesMode = rendered
@@ -41,6 +41,18 @@ function applyPalette() {
   root.style.setProperty('--mobile-backdrop-alpha', String(preferences.backdropStrength / 100))
   root.style.setProperty('--web-ui-text-scale', String(preferences.uiTextScale / 100))
   root.style.setProperty('--web-chat-text-scale', String(preferences.chatTextScale / 100))
+
+  for (const [key, variable] of [
+    ['baseSize', '--dt-base-size'],
+    ['lineHeight', '--dt-line-height'],
+    ['letterSpacing', '--dt-letter-spacing']
+  ] as const) {
+    const value = typography[key]
+
+    if (typeof value === 'string' && value.trim()) {root.style.setProperty(variable, value)}
+    else {root.style.removeProperty(variable)}
+  }
+
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', colors.background)
   root.classList.toggle('dark', rendered === 'dark')
   root.style.colorScheme = rendered

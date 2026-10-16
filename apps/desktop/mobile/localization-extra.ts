@@ -1,6 +1,37 @@
 // Mobile-only copy. Existing Desktop labels are resolved from its shipped catalogs first.
 // Other locales fall back to English for mobile-specific explanations, never raw key names.
 export const mobileEnglish: Record<string, string> = {
+  '试试调整筛选，或加载更早的会话。': 'Adjust Filters Or Load Earlier Sessions.',
+  已载入范围: 'Loaded Scope',
+  更多筛选: 'More Filters',
+  状态: 'Status',
+  来源: 'Source',
+  最近活动时间: 'Last Activity',
+  全部状态: 'All Statuses',
+  已确认空闲: 'Confirmed Idle',
+  运行状态未知: 'Run Status Unknown',
+  按状态筛选: 'Filter By Status',
+  按来源筛选: 'Filter By Source',
+  按时间筛选: 'Filter By Time',
+  全部来源: 'All Sources',
+  未记录来源: 'Source Not Recorded',
+  未记录项目: 'Project Not Recorded',
+  全部时间: 'Any Time',
+  '最近 7 天': 'Last 7 Days',
+  '最近 30 天': 'Last 30 Days',
+  'Desktop／Web（记录来源）': 'Desktop / Web (Recorded Source)',
+  '来源表示创建渠道；状态未知不等于空闲。时间按本机时区。':
+    'Source is the creation channel; unknown is not idle. Times use this device’s timezone.',
+  '项目与来源选项来自已载入的元数据。': 'Project and source options come from loaded metadata.',
+  清除筛选: 'Clear Filters',
+  当前匹配: 'Matching',
+  '搜索最多返回 100 条；不是全库筛选总数。': 'Search returns up to 100 results, not a database-wide filtered total.',
+  '筛选已载入会话；加载更早会话可扩大范围。':
+    'Filters apply to loaded sessions. Load earlier sessions to widen the scope.',
+  '已达到搜索上限，请缩小关键词。': 'Search limit reached. Narrow your keywords.',
+  '部分项目元数据未能读取，项目筛选可能不完整；请刷新重试。':
+    'Some project metadata could not be read. Project filtering may be incomplete; refresh to retry.',
+
   任务: 'Tasks',
   会话任务: 'Session tasks',
   进行中: 'In progress',
@@ -47,8 +78,8 @@ export const mobileEnglish: Record<string, string> = {
   聊天字号: 'Chat text size',
   字体预览: 'Font preview',
   透明效果说明: 'About glass',
-  '界面与聊天字号独立；不改变浏览器或 Desktop 缩放。':
-    'UI and chat text sizes are independent; browser and Desktop zoom are unchanged.',
+  '界面字号是基础，聊天字号额外缩放消息与输入区；不改变浏览器或 Desktop 窗口缩放。':
+    'UI size sets the base; chat size adds a message/editor multiplier. Browser and Desktop window zoom are unchanged.',
   '按设备可用字体实际渲染，缺失时回退；不自动下载字体。':
     'Uses fonts available on this device with fallback; fonts are not downloaded.',
 

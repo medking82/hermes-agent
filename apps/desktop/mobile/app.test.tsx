@@ -92,7 +92,7 @@ it('offers local Desktop appearance settings and restores the saved choice', asy
       blur: 12,
       font: '',
       uiTextScale: 100,
-      chatTextScale: 100
+      chatTextScale: 110
     })
   )
   controller.dispose()
@@ -422,6 +422,54 @@ it.each(['starting', 'resuming'])('announces %s sessions as starting rather than
     fireEvent.click(screen.getByRole('button', { name: '打开会话列表' }))
     expect(screen.getByRole('status', { name: '正在启动' }).getAttribute('title')).toBe('正在启动')
     expect(screen.queryByRole('status', { name: '会话运行中' })).toBeNull()
+  } finally {
+    controller.dispose()
+  }
+})
+
+it('combines visible search project status source and time controls and clears only filters', async () => {
+  const { controller, api, rpc } = setup()
+  const stamp = Date.now() / 1000
+
+  const rows = [
+    { id: 'target', title: '符合全部条件', cwd: '/repo', source: 'desktop', last_active: stamp },
+    { id: 'lease', title: '仅租约不能算运行', cwd: '/repo', source: 'desktop', last_active: stamp, live_lease: true },
+    { id: 'wrong-project', title: '其他项目', cwd: '/other', source: 'desktop', last_active: stamp }
+  ]
+
+  api.request.mockImplementation(async path =>
+    String(path).includes('/search?')
+      ? ({ results: rows.map(row => ({ ...row, session_id: row.id, snippet: 'needle' })) } as never)
+      : { sessions: rows, total: rows.length }
+  )
+  rpc.request.mockImplementation(async (method: string) =>
+    method === 'session.active_list'
+      ? {
+          sessions: rows
+            .filter(row => row.id !== 'lease')
+            .map(row => ({ id: row.id, session_key: row.id, status: 'working' }))
+        }
+      : { session_id: 'x', stored_session_id: 'x', messages: [], info: {} }
+  )
+
+  try {
+    await waitFor(() => expect(controller.getSnapshot().sessions).toHaveLength(3))
+    fireEvent.click(screen.getByRole('button', { name: '打开会话列表' }))
+    fireEvent.change(screen.getByLabelText('按项目筛选'), { target: { value: '/repo' } })
+    fireEvent.change(screen.getByRole('searchbox', { name: '搜索会话' }), { target: { value: 'needle' } })
+    await waitFor(() => expect(api.request.mock.calls.some(([path]) => String(path).includes('q=needle'))).toBe(true))
+    expect(screen.getByLabelText('按项目筛选')).toBeTruthy()
+    fireEvent.click(screen.getByText('更多筛选'))
+    fireEvent.change(screen.getByLabelText('按状态筛选'), { target: { value: 'working' } })
+    fireEvent.change(screen.getByLabelText('按来源筛选'), { target: { value: 'source:desktop' } })
+    fireEvent.change(screen.getByLabelText('按时间筛选'), { target: { value: 'today' } })
+    await waitFor(() => expect(screen.getByText('符合全部条件')).toBeTruthy())
+    expect(screen.queryByText('仅租约不能算运行')).toBeNull()
+    expect(screen.queryByText('其他项目')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '清除筛选' }))
+    expect((screen.getByRole('searchbox', { name: '搜索会话' }) as HTMLInputElement).value).toBe('needle')
+    expect(screen.getByText('其他项目')).toBeTruthy()
+    expect(screen.getByText('仅租约不能算运行')).toBeTruthy()
   } finally {
     controller.dispose()
   }

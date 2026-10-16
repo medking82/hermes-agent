@@ -27,8 +27,8 @@ export function viewportGeometry(
     : { height: layoutHeight, top: 0 }
 }
 
-export function projectMatches(project: string, query: string, path?: string | null): boolean {
-  return Boolean(query.trim()) || !project || path === project
+export function projectMatches(project: string, _query: string, path?: string | null): boolean {
+  return !project || path === project
 }
 
 export function draftKey(profile: string, storedId: string | null): string {

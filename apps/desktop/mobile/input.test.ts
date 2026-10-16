@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { draftKey, projectMatches, shouldSubmitKey, viewportGeometry } from './input'
 
 describe('iOS composition and keyboard policy', () => {
-  it('does not hide full-text hits behind an invisible project filter', () => {
-    expect(projectMatches('/project', 'search', undefined)).toBe(true)
+  it('intersects project selection with full-text search instead of bypassing it', () => {
+    expect(projectMatches('/project', 'search', undefined)).toBe(false)
+    expect(projectMatches('/project', 'search', '/project')).toBe(true)
     expect(projectMatches('/project', '', '/project')).toBe(true)
     expect(projectMatches('/project', '', '/other')).toBe(false)
   })
