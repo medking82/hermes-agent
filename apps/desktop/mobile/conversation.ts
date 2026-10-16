@@ -1,22 +1,36 @@
+import { latestSessionTodoSnapshot, parseTodoRevision, parseTodos, type TodoItem } from '../src/lib/todos'
+
+export type LiveStatus = 'idle' | 'starting' | 'waiting' | 'working'
+export const isLiveStatus = (value: unknown): value is LiveStatus =>
+  value === 'idle' || value === 'starting' || value === 'waiting' || value === 'working'
+
 export interface Message {
   id: string
   role: 'user' | 'assistant' | 'tool'
   text: string
   streaming?: boolean
   name?: string
+  result?: unknown
+  args?: unknown
+  toolCallId?: string
   delivery?: 'pending' | 'unknown'
 }
 export interface Conversation {
+  status?: LiveStatus
   liveId: string
   storedId: string
   title: string
   model: string
   running: boolean
   messages: Message[]
+  todos?: TodoItem[]
+  todoRevision?: number
   error?: string
 }
 export interface Snapshot {
   session_id: string
+  todo_state?: unknown
+  status?: unknown
   stored_session_id?: string
   resumed?: string
   queued?: { user: string } | null
@@ -154,9 +168,21 @@ export function fromSnapshot(snapshot: Snapshot): Conversation {
       id: String(row._row_id ?? row.id ?? `history-${index}`),
       role: row.role as Message['role'],
       text: displayText(row),
-      name: row.name ?? row.tool_name
+      name: row.name ?? row.tool_name,
+      toolCallId: row.tool_call_id,
+      ...(row.role === 'tool' ? { result: row.display_content !== undefined ? row.display_content : row.content } : {})
     }))
     .filter(message => message.role !== 'assistant' || Boolean(message.text.trim()))
+
+  const todoState =
+    parseTodos(snapshot.todo_state) !== null
+      ? snapshot.todo_state
+      : latestSessionTodoSnapshot(
+          messages.map(message => ({
+            parts:
+              message.role === 'tool' ? [{ type: 'tool-call', toolName: message.name, result: message.result }] : []
+          }))
+        )
 
   if (snapshot.inflight?.assistant) {
     messages.push({
@@ -172,7 +198,11 @@ export function fromSnapshot(snapshot: Snapshot): Conversation {
     storedId: snapshot.stored_session_id ?? snapshot.resumed ?? snapshot.session_id,
     title: snapshot.info?.title || '新对话',
     model: snapshot.info?.model || '',
+    status: isLiveStatus(snapshot.status) ? snapshot.status : undefined,
     running: Boolean(snapshot.running ?? snapshot.info?.running),
+    ...(parseTodos(todoState) !== null
+      ? { todos: parseTodos(todoState)!, todoRevision: parseTodoRevision(todoState) ?? undefined }
+      : {}),
     messages
   }
 }
@@ -184,9 +214,21 @@ export function applyEvent(state: Conversation, event: EventFrame): Conversation
 
   const payload = (event.payload ?? {}) as Record<string, unknown>
 
+  if (event.type === 'todo.updated') {
+    const todos = parseTodos(payload)
+    const revision = parseTodoRevision(payload)
+
+    if (todos === null || revision === null || revision < (state.todoRevision ?? 0)) {
+      return state
+    }
+
+    return { ...state, todos, todoRevision: revision }
+  }
+
   if (event.type === 'session.info') {
     return {
       ...state,
+      ...(isLiveStatus(payload.status) ? { status: payload.status } : {}),
       ...(typeof payload.running === 'boolean' ? { running: payload.running } : {}),
       ...(typeof payload.model === 'string' ? { model: payload.model } : {}),
       ...(typeof payload.title === 'string' && payload.title ? { title: payload.title } : {})
@@ -229,17 +271,27 @@ export function applyEvent(state: Conversation, event: EventFrame): Conversation
   }
 
   if (event.type === 'tool.start') {
-    const messages = state.messages.map(m => (m.streaming ? { ...m, streaming: false } : m))
+    const messages = state.messages.map(m => (m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m))
+    const toolId = payload.tool_id ?? payload.tool_call_id
+    const baseId = `tool-${toolId ?? messages.length}`
+    let id = baseId
+    let suffix = messages.length
+
+    while (messages.some(message => message.id === id)) {
+      id = `${baseId}-${suffix++}`
+    }
 
     return {
       ...state,
       messages: [
         ...messages,
         {
-          id: `tool-${payload.tool_call_id ?? messages.length}`,
+          id,
+          toolCallId: toolId == null ? undefined : String(toolId),
           role: 'tool',
           name: String(payload.name ?? payload.tool ?? '工具'),
-          text: String(payload.args_text ?? '执行中…'),
+          args: payload.args,
+          text: String(payload.args_text ?? ''),
           streaming: true
         }
       ]
@@ -250,8 +302,20 @@ export function applyEvent(state: Conversation, event: EventFrame): Conversation
     const name = String(payload.name ?? payload.tool ?? '工具')
     let index = state.messages.findLastIndex(m => m.role === 'tool' && m.streaming && m.name === name)
 
-    if (payload.tool_call_id) {
-      index = state.messages.findIndex(m => m.id === `tool-${payload.tool_call_id}`)
+    if (payload.tool_id != null || payload.tool_call_id != null) {
+      const toolId = String(payload.tool_id ?? payload.tool_call_id)
+
+      const matches = (message: Message) => message.role === 'tool' && message.toolCallId === toolId
+
+      index = state.messages.findLastIndex(message => message.streaming && matches(message))
+
+      if (index < 0) {
+        // A resumed unfinished receipt has no result yet. Never replace completed
+        // history just because a later turn reused its native ID.
+        index = state.messages.findLastIndex(
+          message => matches(message) && !message.text.trim() && (message.result == null || message.result === '')
+        )
+      }
     }
 
     if (index < 0) {
@@ -262,7 +326,14 @@ export function applyEvent(state: Conversation, event: EventFrame): Conversation
     messages[index] = {
       ...messages[index],
       streaming: false,
-      text: String(payload.result_text ?? payload.result ?? '已完成')
+      result: payload.result ?? payload.result_text,
+      text: displayText({
+        role: 'tool',
+        content:
+          typeof (payload.result_text ?? payload.result) === 'string'
+            ? (payload.result_text ?? payload.result)
+            : JSON.stringify(payload.result ?? '')
+      })
     }
 
     return { ...state, messages }

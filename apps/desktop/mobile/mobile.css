@@ -1389,3 +1389,35 @@ body {
     gap: 12px;
   }
 }
+
+.mobile-photo { display: block; width: fit-content; max-width: 100%; border: 0; background: none; padding: 0; margin-block: 4px; cursor: zoom-in; }
+.mobile-photo img { display: block; max-width: min(100%, 360px); max-height: 260px; object-fit: contain; border-radius: 8px; }
+.mobile-photo-loading { display: block; min-height: 100px; font-size: 12px; color: var(--mobile-muted); }
+/* Desktop session status semantics: waiting=amber act-now, working/starting=accent, idle shows no mark. */
+.session-live-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.session-live-dot.working { background: conic-gradient(var(--mobile-accent) 0 40%, transparent 40%); animation: mobile-live-arc 1.1s linear infinite; }
+.session-live-dot.waiting { background: #f59e0b; }
+.session-live-dot.starting, .session-live-dot.leased { border: 1px solid var(--mobile-accent); }
+.session-live-dot.leased { opacity: 0.75; }
+@keyframes mobile-live-arc { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .session-live-dot.working { animation: none; background: var(--mobile-accent); } }
+/* Desktop ScaffoldRow/DisclosureRow: activity is scaffolding, not message cards. */
+.mobile-tool-run { margin: 3px 0; min-width: 0; --conversation-line-height: 20px; --conversation-tool-font-size: calc(12px * var(--web-ui-text-scale, 1)); --conversation-scaffold-text: var(--mobile-muted); --conversation-scaffold-meta: var(--mobile-muted); --disclosure-caret-rest: .55; }
+.mobile-tool-run > div > button { min-height: 32px; align-items: center; }
+.mobile-tool-meta { font-size: .75em; opacity: .7; margin-inline-start: 6px; }
+.mobile-tool-body { overflow: hidden; }
+.mobile-tool-detail { min-width: 0; padding: 3px 8px; border-inline-start: 1px solid var(--mobile-border); }
+.mobile-tool-name { font-size: 11px; color: var(--mobile-muted); }
+.mobile-tool-detail pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.5; padding: 5px 0; }
+.tool-error-mark { color: var(--destructive, #dc6464); }
+@media (pointer: coarse), (pointer: none) { .mobile-tool-run > div > button { min-height: 44px; } }
+
+.mobile-task-panel { margin: 0 0 8px; border: 1px solid var(--mobile-border); border-radius: 10px; padding: 2px 8px; background: var(--mobile-surface); --conversation-line-height: 20px; --conversation-tool-font-size: 12px; }
+.mobile-task-panel button { min-height: 44px; }
+.mobile-task-panel ul { list-style: none; padding: 0 4px 6px; margin: 0; max-height: min(22dvh, 180px); overflow: auto; overscroll-behavior: contain; }
+.mobile-task-panel li { display: flex; align-items: flex-start; gap: 8px; padding-block: 4px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.mobile-task-panel li svg { flex-shrink: 0; margin-top: 2px; }
+.mobile-task-panel [data-task-status=completed], .mobile-task-panel [data-task-status=cancelled] { color: var(--mobile-muted); }
+.task-spinner { animation: mobile-task-spin 1.6s linear infinite; }
+@keyframes mobile-task-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .task-spinner { animation: none; } }

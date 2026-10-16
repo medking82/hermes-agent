@@ -29,6 +29,8 @@ const officialPaths: Record<string, string> = {
   复制: 'common.copy',
   复制回复: 'common.copy',
   已复制: 'common.copied',
+  会话运行中: 'sidebar.row.sessionRunning',
+  需要你输入: 'sidebar.row.needsInput',
   完成: 'common.done',
   执行中: 'sidebar.statusDivider.working',
   已完成: 'sidebar.statusDivider.done',

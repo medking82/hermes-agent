@@ -4,7 +4,20 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { MobileApp } from './app'
 import { MobileController } from './controller'
 import { setWebLocale } from './localization'
-beforeEach(() => setWebLocale('zh'))
+import { SessionImage } from './session-image'
+import { ToolActivity } from './tool-activity'
+// JSDOM has no layout/ResizeObserver; real resize/scroll behavior is covered in Playwright.
+beforeEach(() => {
+  setWebLocale('zh')
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  )
+})
 afterEach(() => {
   cleanup()
   localStorage.clear()
@@ -93,7 +106,7 @@ it('does not send on soft-keyboard Enter or composition confirmation', async () 
   fireEvent.compositionStart(input)
   fireEvent.keyDown(input, { key: 'Enter', keyCode: 13, metaKey: true })
   fireEvent.compositionEnd(input)
-  expect(rpc.request).not.toHaveBeenCalled()
+  expect(rpc.request.mock.calls.filter(call => call[0] === 'prompt.submit').length).toBe(0)
   fireEvent.click(screen.getByRole('button', { name: '发送消息' }))
   await waitFor(() =>
     expect(rpc.request).toHaveBeenCalledWith('prompt.submit', expect.objectContaining({ text: '中文输入' }), 1800000)
@@ -221,10 +234,300 @@ it('existing visibility lifecycle resumes saved polling when the browser returns
       await vi.advanceTimersByTimeAsync(3100)
     })
     expect(screen.getByText('VISIBLE_SAVED_REPLY')).toBeTruthy()
-    expect(rpc.request.mock.calls.every(args => args[0] === 'session.resume')).toBe(true)
+    expect(
+      rpc.request.mock.calls.every(args => args[0] === 'session.resume' || args[0] === 'session.active_list')
+    ).toBe(true)
   } finally {
     controller.dispose()
     visible.mockRestore()
     vi.useRealTimers()
   }
+})
+
+it('collapses consecutive routine tools into one Desktop-style activity run', async () => {
+  const { controller, rpc } = setup()
+  await waitFor(() => expect(controller.getSnapshot().connection).toBe('ready'))
+  rpc.request.mockResolvedValueOnce({
+    session_id: 'saved',
+    stored_session_id: 'saved',
+    info: {},
+    messages: Array.from({ length: 5 }, (_, i) => ({
+      _row_id: i + 1,
+      role: 'tool',
+      tool_name: 'skill_view',
+      content: 'tool output'
+    }))
+  } as never)
+  await act(async () => {
+    await controller.open('saved')
+  })
+  expect(screen.getByRole('button', { name: /5 项工具调用/ }).getAttribute('aria-expanded')).toBe('false')
+  expect(screen.queryAllByText('tool output')).toHaveLength(0)
+  fireEvent.click(screen.getByRole('button', { name: /5 项工具调用/ }))
+  expect(screen.getAllByText('skill_view')).toHaveLength(5)
+  controller.dispose()
+})
+
+it('ends a stalled image load after the request deadline', async () => {
+  vi.useFakeTimers()
+  let signal: AbortSignal | undefined
+
+  const api = {
+    request: vi.fn((_path: string, init: RequestInit) => {
+      signal = init.signal as AbortSignal
+
+      return new Promise(() => {})
+    })
+  }
+
+  try {
+    render(
+      <SessionImage
+        api={api as never}
+        path="/home/example/.hermes/images/stalled.png"
+        profile="default"
+        sessionId="saved"
+      />
+    )
+    expect(screen.getByRole('status').textContent).toBe('正在载入图片…')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_001)
+    })
+    expect(signal?.aborted).toBe(true)
+    expect(screen.getByRole('status').textContent).toBe('图片无法载入')
+    expect(api.request).toHaveBeenCalledTimes(1)
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+  }
+})
+
+it('renders no tool activity for an empty tool group', () => {
+  const view = render(<ToolActivity messages={[]} />)
+  expect(view.container.childElementCount).toBe(0)
+})
+
+it('cancels image request and deadline on unmount without retrying', async () => {
+  vi.useFakeTimers()
+  let signal: AbortSignal | undefined
+
+  const api = {
+    request: vi.fn((_path: string, init: RequestInit) => {
+      signal = init.signal as AbortSignal
+
+      return new Promise(() => {})
+    })
+  }
+
+  try {
+    const view = render(
+      <SessionImage
+        api={api as never}
+        path="/home/example/.hermes/images/stalled.png"
+        profile="default"
+        sessionId="saved"
+      />
+    )
+
+    expect(signal?.aborted).toBe(false)
+    const timersBefore = vi.getTimerCount()
+    view.unmount()
+    expect(signal?.aborted).toBe(true)
+    expect(vi.getTimerCount()).toBeLessThan(timersBefore)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_001)
+    })
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(api.request).toHaveBeenCalledTimes(1)
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+  }
+})
+
+it('loads persisted image references through the authenticated same-origin media route', async () => {
+  const { controller, rpc, api } = setup()
+  await waitFor(() => expect(controller.getSnapshot().connection).toBe('ready'))
+  const path = '/home/example/.hermes/images/upload_fixture.png'
+
+  const dataUrl =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j7tQAAAAASUVORK5CYII='
+
+  api.request.mockImplementation(async (url?: unknown) =>
+    String(url).startsWith('/api/fs/read-data-url?') ? ({ dataUrl } as never) : { sessions: [], total: 0 }
+  )
+  rpc.request.mockResolvedValueOnce({
+    session_id: 'saved',
+    stored_session_id: 'saved',
+    messages: [{ role: 'user', content: `@image:${path}\n[screenshot]\n图片说明` }],
+    info: {}
+  } as never)
+  await act(async () => {
+    await controller.open('saved')
+  })
+  const image = await screen.findByRole('img', { name: '会话图片' })
+  expect(image.getAttribute('src')).toBe(dataUrl)
+  expect(screen.getByText('图片说明')).toBeTruthy()
+  expect(
+    api.request.mock.calls.some(
+      call => String(call[0]).includes('session_id=saved') && String(call[0]).includes(encodeURIComponent(path))
+    )
+  ).toBe(true)
+  expect(screen.queryByText('[screenshot]')).toBeNull()
+  controller.dispose()
+})
+
+it('marks sessions held by a live backend elsewhere without claiming a running turn', async () => {
+  const { controller, api, rpc } = setup()
+  api.request.mockImplementation(async path =>
+    String(path).startsWith('/api/sessions?')
+      ? {
+          sessions: [
+            { id: 'saved-a', title: '另一端打开的会话', last_active: 1, live_lease: true },
+            { id: 'saved-b', title: '普通会话', last_active: 2, live_lease: false },
+            { id: 'saved-c', title: '仅租约标记的会话', last_active: 3, live_lease: true }
+          ],
+          total: 3
+        }
+      : { sessions: [], total: 0 }
+  )
+  rpc.request.mockImplementation(async (method: string) =>
+    method === 'session.active_list'
+      ? { sessions: [{ id: 'live-a', session_key: 'saved-a', status: 'working' }] }
+      : { session_id: 'x', stored_session_id: 'x', messages: [], info: {} }
+  )
+  await waitFor(() => expect(controller.getSnapshot().connection).toBe('ready'))
+  await waitFor(() => expect(controller.getSnapshot().sessions.some(row => row.live_lease)).toBe(true))
+  fireEvent.click(screen.getByRole('button', { name: '打开会话列表' }))
+  // In-process status wins for the live row; the lease-only row gets the cross-process marker.
+  expect(screen.getByRole('status', { name: '会话运行中' })).toBeTruthy()
+  expect(screen.getByText('另一端打开的会话')).toBeTruthy()
+  expect(screen.getByRole('status', { name: '后端已连接；运行状态未知' })).toBeTruthy()
+  expect(screen.queryByRole('status', { name: '另一端活动中' })).toBeNull()
+  expect(screen.getByText('仅租约标记的会话')).toBeTruthy()
+  controller.dispose()
+})
+
+it.each(['starting', 'resuming'])('announces %s sessions as starting rather than working', async status => {
+  const { controller, api, rpc } = setup()
+  api.request.mockResolvedValue({ sessions: [{ id: 'saved-a', title: '启动中的会话' }], total: 1 })
+  rpc.request.mockImplementation(async (method: string) =>
+    method === 'session.active_list'
+      ? { sessions: [{ id: 'live', session_key: 'saved-a', status }] }
+      : { session_id: 'x', stored_session_id: 'x', messages: [], info: {} }
+  )
+
+  try {
+    await waitFor(() => expect(controller.getSnapshot().sessions[0]?.live_status).toBe('starting'))
+    fireEvent.click(screen.getByRole('button', { name: '打开会话列表' }))
+    expect(screen.getByRole('status', { name: '正在启动' }).getAttribute('title')).toBe('正在启动')
+    expect(screen.queryByRole('status', { name: '会话运行中' })).toBeNull()
+  } finally {
+    controller.dispose()
+  }
+})
+
+it('keeps load-more reachable when live-only rows inflate the visible session count', async () => {
+  const { controller, api, rpc } = setup()
+  api.request.mockImplementation(async path => {
+    const nextPage = String(path).includes('offset=1&')
+
+    return {
+      sessions: [{ id: nextPage ? 'saved-b' : 'saved-a', title: nextPage ? '更早保存的会话' : '已保存的会话' }],
+      total: 2
+    }
+  })
+  rpc.request.mockImplementation(async (method: string) =>
+    method === 'session.active_list'
+      ? { sessions: [{ id: 'runtime-only', session_key: 'live-only', status: 'working', title: '尚未保存的会话' }] }
+      : { session_id: 'x', stored_session_id: 'x', messages: [], info: {} }
+  )
+
+  try {
+    await waitFor(() => expect(controller.getSnapshot().sessions.map(row => row.id)).toEqual(['saved-a', 'live-only']))
+    vi.useFakeTimers()
+    fireEvent.click(screen.getByRole('button', { name: '打开会话列表' }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(251)
+    })
+    const more = screen.getByRole('button', { name: '加载更早的会话' })
+    await act(async () => {
+      fireEvent.click(more)
+    })
+    expect(screen.getByText('更早保存的会话')).toBeTruthy()
+    expect(api.request.mock.calls.some(([path]) => String(path).includes('offset=1&'))).toBe(true)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(251)
+    })
+    expect(screen.queryByRole('button', { name: '加载更早的会话' })).toBeNull()
+  } finally {
+    controller.dispose()
+    vi.useRealTimers()
+  }
+})
+
+it('paints real runtime status dots on session rows instead of recent-activity marks', async () => {
+  const { controller, api, rpc } = setup()
+  api.request.mockImplementation(async path =>
+    String(path).startsWith('/api/sessions?')
+      ? {
+          sessions: [
+            { id: 'saved-a', title: '运行中的会话', last_active: 1 },
+            { id: 'saved-b', title: '空闲会话', last_active: 2 }
+          ],
+          total: 2
+        }
+      : { sessions: [], total: 0 }
+  )
+  rpc.request.mockImplementation(async (method: string) =>
+    method === 'session.active_list'
+      ? {
+          sessions: [
+            { id: 'live-a', session_key: 'saved-a', status: 'working' },
+            { id: 'live-b', session_key: 'saved-b', status: 'idle' },
+            { id: 'live-w', session_key: 'saved-w', status: 'waiting', title: '等待中的会话', preview: 'p' }
+          ]
+        }
+      : { session_id: 'x', stored_session_id: 'x', messages: [], info: {} }
+  )
+  await waitFor(() => expect(controller.getSnapshot().connection).toBe('ready'))
+  await waitFor(() => expect(controller.getSnapshot().sessions.some(row => row.live_status === 'working')).toBe(true))
+  fireEvent.click(screen.getByRole('button', { name: '打开会话列表' }))
+  expect(screen.getByRole('status', { name: '会话运行中' })).toBeTruthy()
+  expect(screen.getByRole('status', { name: '需要你输入' })).toBeTruthy()
+  expect(screen.getByText('等待中的会话')).toBeTruthy()
+  expect(screen.queryAllByRole('status', { name: '空闲' }).length).toBe(0)
+  // The list's own mount debounce re-fetches saved rows; live statuses must survive that refresh.
+  await act(async () => {
+    await new Promise(resolve => setTimeout(resolve, 500))
+  })
+  expect(screen.getByRole('status', { name: '会话运行中' })).toBeTruthy()
+  expect(screen.getByRole('status', { name: '需要你输入' })).toBeTruthy()
+  controller.dispose()
+})
+
+it('projects the authoritative session todo state into a visible task panel', async () => {
+  const { controller, rpc } = setup()
+  await waitFor(() => expect(controller.getSnapshot().connection).toBe('ready'))
+  rpc.request.mockResolvedValueOnce({
+    session_id: 'saved',
+    stored_session_id: 'saved',
+    messages: [],
+    info: {},
+    todo_state: {
+      revision: 4,
+      todos: [
+        { id: 'a', content: '已验证的工作', status: 'completed' },
+        { id: 'b', content: '当前正在处理', status: 'in_progress' },
+        { id: 'c', content: '接下来验收', status: 'pending', parent: 'b' }
+      ]
+    }
+  } as never)
+  await act(async () => {
+    await controller.open('saved')
+  })
+  expect(screen.getByRole('button', { name: /任务 1\/3/ })).toBeTruthy()
+  expect(screen.getByText('当前正在处理')).toBeTruthy()
+  expect(screen.getByText('接下来验收')).toBeTruthy()
+  controller.dispose()
 })

@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 
 import { expect, type Page, test } from '@playwright/test'
 
@@ -44,10 +44,18 @@ async function fixture(page: Page, long = false, rich = false) {
             title: '测试夹具 · 移动体验',
             cwd: '/fixture/mobile',
             last_active: Date.now() / 1000,
+            live_lease: true,
             preview: '会话与输入测试'
+          },
+          {
+            id: 'fixture-elsewhere',
+            title: '夹具 · 另一端持有',
+            last_active: Date.now() / 1000,
+            live_lease: true,
+            preview: '租约标记'
           }
         ],
-        total: 1
+        total: 2
       }
     })
   )
@@ -74,12 +82,16 @@ async function fixture(page: Page, long = false, rich = false) {
       }
     })
   )
+
+  let emitNative: (type: string, payload: unknown) => void = () => {}
+  let liveStatus: 'idle' | 'starting' | 'waiting' | 'working' = 'working'
   await page.routeWebSocket('**/api/ws?*', ws => {
     const event = (type: string, payload: unknown) =>
       ws.send(
         JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type, session_id: 'fixture-session', payload } })
       )
 
+    emitNative = event
     ws.onMessage(raw => {
       const request = JSON.parse(String(raw))
 
@@ -95,12 +107,32 @@ async function fixture(page: Page, long = false, rich = false) {
           stored_session_id: 'fixture-session',
           messages: messages.map((message, index) => ({ ...message, _row_id: index + 1 })),
           running,
+          status: running ? 'working' : 'idle',
           info: { title: '测试夹具 · 移动体验', model: 'fixture-model' }
         }
       }
 
       if (request.method === 'session.events.since') {
         result = { events: [] }
+      }
+
+      if (request.method === 'session.active_list') {
+        result = {
+          sessions: [
+            {
+              current: false,
+              id: 'fixture-live',
+              last_active: Date.now() / 1000,
+              message_count: 2,
+              model: 'fixture-model',
+              preview: '会话与输入测试',
+              session_key: 'fixture-session',
+              started_at: Date.now() / 1000,
+              status: liveStatus,
+              title: '测试夹具 · 移动体验'
+            }
+          ]
+        }
       }
 
       if (request.method === 'prompt.submit') {
@@ -125,6 +157,13 @@ async function fixture(page: Page, long = false, rich = false) {
   })
 
   return {
+    replaceHistory: (rows: typeof messages) => {
+      messages = rows
+    },
+    setLiveStatus: (status: 'idle' | 'starting' | 'waiting' | 'working') => {
+      liveStatus = status
+    },
+    emit: (type: string, payload: unknown) => emitNative(type, payload),
     submits: () => submits,
     connections: () => connections,
     saveReply(text: string) {
@@ -157,6 +196,134 @@ async function openSession(page: Page) {
     })
   await expect(page.getByRole('status').filter({ hasText: '正在恢复对话' })).toHaveCount(0)
 }
+
+test('renders stored uploads through same-origin media and opens the Desktop image lightbox', async ({
+  page
+}, info) => {
+  const backend = await fixture(page)
+  const path = '/home/fixture/.hermes/images/upload_fixture.png'
+  backend.replaceHistory([{ role: 'user', content: `@image:${path}\n[screenshot]\n夹具：历史图片` }])
+  const bytes = await readFile('mobile/public/hermes-icon.png')
+  const mediaReads: string[] = []
+  await page.route('**/api/fs/read-data-url?*', route => {
+    mediaReads.push(route.request().url())
+
+    return route.fulfill({ json: { dataUrl: `data:image/png;base64,${bytes.toString('base64')}` } })
+  })
+  await page.goto('/mobile/')
+  await openSession(page)
+  const image = page.getByRole('img', { name: '会话图片' })
+  await expect.poll(() => image.evaluate(img => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+  expect(mediaReads.length).toBe(1)
+  const query = new URL(mediaReads[0]).searchParams
+  expect(query.get('path')).toBe(path)
+  expect(query.get('session_id')).toBe('fixture-session')
+  expect(query.get('profile')).toBe('default')
+  await page.getByRole('button', { name: '查看图片' }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await page.screenshot({ path: `mobile/test-results/parity-image-${info.project.name}.png`, fullPage: true })
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+})
+
+test('uses native tool receipts and revisioned task state in the same conversation', async ({ page }, info) => {
+  const backend = await fixture(page)
+  await page.goto('/mobile/')
+  await openSession(page)
+
+  for (let i = 0; i < 5; i++) {
+    backend.emit('tool.start', { tool_id: `tool-${i}`, name: 'skill_view', args: { name: 'fixture' } })
+    backend.emit('tool.complete', {
+      tool_id: `tool-${i}`,
+      name: 'skill_view',
+      result: { output: `FIXTURE_OUTPUT_${i}` }
+    })
+  }
+
+  const group = page.getByRole('button', { name: /5 项工具调用/ })
+  await expect(group).toHaveAttribute('aria-expanded', 'false')
+  await group.click()
+  await expect(page.getByText('FIXTURE_OUTPUT_0', { exact: true })).toBeVisible()
+  backend.emit('todo.updated', {
+    revision: 3,
+    todos: [
+      { id: 'one', content: '夹具：已完成', status: 'completed' },
+      { id: 'two', content: '夹具：当前工作', status: 'in_progress' },
+      { id: 'three', content: '夹具：后续验收', status: 'pending', parent: 'two' }
+    ]
+  })
+  await expect(page.getByRole('button', { name: /任务 1\/3/ })).toBeVisible()
+  await expect(page.getByText('夹具：当前工作')).toBeVisible()
+  backend.emit('message.delta', { text: '夹具：新的工具段' })
+  backend.emit('tool.start', { tool_id: 'fail', name: 'terminal', args: { command: 'fixture command' } })
+  await expect(page.getByRole('button', { name: /terminal.*执行中/ })).toBeVisible()
+  backend.emit('tool.complete', {
+    tool_id: 'fail',
+    name: 'terminal',
+    result: { output: 'FIXTURE_FAILED_OUTPUT', exit_code: 1 }
+  })
+  await expect(page.getByText(/FIXTURE_FAILED_OUTPUT/)).toBeVisible()
+  await page.screenshot({ path: `mobile/test-results/parity-tools-tasks-${info.project.name}.png`, fullPage: true })
+})
+
+test('session rows show real runtime status and follow sessions.changed broadcasts', async ({ page }, info) => {
+  const backend = await fixture(page)
+  await page.goto('/mobile/')
+  await openSession(page)
+  const opener = page.getByRole('button', { name: '打开会话列表' })
+
+  if (await opener.isVisible()) {
+    await opener.click()
+  }
+
+  const row = page.getByRole('button', { name: /测试夹具 · 移动体验/ })
+  await expect(row.getByRole('status', { name: '会话运行中' })).toBeVisible()
+  const leasedRow = page.getByRole('button', { name: /夹具 · 另一端持有/ })
+  await expect(leasedRow.getByRole('status', { name: '后端已连接；运行状态未知' })).toBeVisible()
+  backend.setLiveStatus('waiting')
+  backend.emit('sessions.changed', {})
+  await expect(row.getByRole('status', { name: '需要你输入' })).toBeVisible()
+  await page.screenshot({ path: `mobile/test-results/parity-live-status-${info.project.name}.png`, fullPage: true })
+})
+
+test('follows asynchronous transcript growth but does not steal an upward reading position', async ({ page }, info) => {
+  await fixture(page, true)
+  await page.goto('/mobile/')
+  await openSession(page)
+  const viewport = page.locator('.transcript')
+  await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(5)
+  await page.locator('.thread-content').evaluate(el => {
+    const block = document.createElement('div')
+    block.dataset.delayedLayout = 'true'
+    block.style.height = '420px'
+    el.append(block)
+  })
+  await expect
+    .poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight), { timeout: 900 })
+    .toBeLessThan(5)
+  await viewport.hover()
+
+  if (info.project.use.browserName === 'webkit') {
+    // Mobile WebKit has no Playwright wheel support. This branch verifies layout/state,
+    // not a physical iOS swipe; Chromium above exercises trusted wheel input.
+    await viewport.evaluate(el => {
+      el.scrollTop = 0
+      el.dispatchEvent(new Event('scroll', { bubbles: true }))
+    })
+  } else {
+    await page.mouse.wheel(0, -480)
+  }
+
+  await expect(page.getByRole('button', { name: '回到最新' })).toBeVisible()
+  const top = await viewport.evaluate(el => el.scrollTop)
+  await page.locator('[data-delayed-layout]').evaluate(el => {
+    ;(el as HTMLElement).style.height = '840px'
+  })
+  await page.waitForTimeout(120)
+  expect(Math.abs((await viewport.evaluate(el => el.scrollTop)) - top)).toBeLessThan(3)
+  await page.getByRole('button', { name: '回到最新' }).click()
+  await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(5)
+})
 
 test('official Desktop theme and locale matrix keeps the original backdrop and bounded layout', async ({
   page

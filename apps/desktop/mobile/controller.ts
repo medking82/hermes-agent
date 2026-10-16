@@ -4,10 +4,12 @@ import type { PromptSubmitParams } from '../../shared/src/gateway-contract.gener
 import { HermesGateway } from '../src/api/client'
 
 import { BrowserApi, SignInRequired } from './browser-api'
-import { applyEvent, type Conversation, fromSnapshot, type Snapshot } from './conversation'
+import { applyEvent, type Conversation, fromSnapshot, type LiveStatus, type Snapshot } from './conversation'
 
 export interface SessionRow {
   id: string
+  live_status?: LiveStatus
+  live_lease?: boolean
   title?: string | null
   preview?: string
   cwd?: string | null
@@ -21,6 +23,7 @@ export interface MobileState {
   connection: 'connecting' | 'ready' | 'offline' | 'signin' | 'failed'
   sessions: SessionRow[]
   total: number
+  hasMoreSessions: boolean
   listLoading: boolean
   listError?: string
   opening: boolean
@@ -37,6 +40,7 @@ export class MobileController {
     connection: 'connecting',
     sessions: [],
     total: 0,
+    hasMoreSessions: false,
     listLoading: false,
     opening: false,
     sending: false,
@@ -51,10 +55,15 @@ export class MobileController {
   private reconnectTimer?: ReturnType<typeof setTimeout>
   private watchTimer?: ReturnType<typeof setTimeout>
   private watching = false
+  private liveGeneration = 0
+  private savedRows: SessionRow[] = []
+  private savedOffset = 0
+  private listQuery = ''
+  private savedQuery = ''
+  private changeTimer?: ReturnType<typeof setTimeout>
   private savedVersion?: { storedId: string; stamp: string; fetchedAt: number }
   private connecting = false
   private disposed = false
-  private unsupportedAuthority = false
   private readonly off: Array<() => void>
   readonly profile = 'default'
 
@@ -64,14 +73,15 @@ export class MobileController {
   ) {
     this.off = [
       gateway.onAny(event => {
-        if (event.type === 'gateway.ready' && (event.payload as { session_authority?: boolean })?.session_authority) {
-          this.unsupportedAuthority = true
-          clearTimeout(this.reconnectTimer)
-          this.update({
-            connection: 'failed',
-            error: '后端使用共享会话协议，本候选版暂不支持；没有提交任务。请继续使用 Desktop。'
-          })
-          this.gateway.close()
+        if (event.type === 'sessions.changed') {
+          clearTimeout(this.changeTimer)
+          this.changeTimer = setTimeout(() => {
+            this.changeTimer = undefined
+
+            if (this.state.connection === 'ready' && !this.disposed) {
+              void this.loadSessions()
+            }
+          }, 300)
 
           return
         }
@@ -101,7 +111,7 @@ export class MobileController {
           this.update({ controls: [] })
         }
 
-        if ((status === 'closed' || status === 'error') && !this.disposed && !this.unsupportedAuthority) {
+        if ((status === 'closed' || status === 'error') && !this.disposed) {
           this.update({ connection: 'offline', controls: [] })
           this.scheduleReconnect()
         }
@@ -140,7 +150,7 @@ export class MobileController {
     )
   }
   async connect() {
-    if (this.disposed || this.connecting || this.unsupportedAuthority) {
+    if (this.disposed || this.connecting) {
       return
     }
 
@@ -159,10 +169,6 @@ export class MobileController {
 
       await this.gateway.connect(url)
 
-      if (this.unsupportedAuthority) {
-        return
-      }
-
       if (this.disposed) {
         this.gateway.close()
 
@@ -180,10 +186,6 @@ export class MobileController {
       await this.loadSessions()
       this.scheduleWatch()
     } catch (error) {
-      if (this.unsupportedAuthority) {
-        return
-      }
-
       this.fail(error)
 
       if (!transportReady && !(error instanceof SignInRequired)) {
@@ -197,7 +199,6 @@ export class MobileController {
   private scheduleReconnect() {
     if (
       this.disposed ||
-      this.unsupportedAuthority ||
       this.reconnectTimer ||
       this.state.connection === 'signin' ||
       document.hidden ||
@@ -232,9 +233,69 @@ export class MobileController {
       }
     }
   }
-  async loadSessions(query = '', more = false) {
+  async loadLiveSessions() {
+    const generation = ++this.liveGeneration
+
+    try {
+      const result = await this.gateway.request<{
+        sessions: Array<{
+          id: string
+          session_key: string
+          status: unknown
+          title?: string
+          preview?: string
+          model?: string
+          last_active?: number
+          started_at?: number
+        }>
+      }>('session.active_list', {})
+
+      if (generation !== this.liveGeneration || this.disposed) {
+        return
+      }
+
+      const wireStatus = ['idle', 'starting', 'waiting', 'working', 'streaming', 'resuming']
+
+      const live = result.sessions
+        .filter(row => row && typeof row.session_key === 'string' && wireStatus.includes(String(row.status)))
+        .map(row => ({
+          ...row,
+          status: (row.status === 'streaming'
+            ? 'working'
+            : row.status === 'resuming'
+              ? 'starting'
+              : row.status) as LiveStatus
+        }))
+
+      const byKey = new Map(live.map(row => [row.session_key, row]))
+      const known = new Set(this.savedRows.map(row => row.id))
+
+      const merged = this.savedRows.map(row => {
+        const liveRow = byKey.get(row.id)
+
+        return liveRow ? { ...row, live_status: liveRow.status as LiveStatus } : row
+      })
+
+      const extra = [...byKey.values()]
+        .filter(row => !this.listQuery.trim() && !this.savedQuery.trim() && !known.has(row.session_key))
+        .map(row => ({
+          id: row.session_key,
+          live_status: row.status as LiveStatus,
+          title: row.title,
+          preview: row.preview,
+          model: row.model,
+          last_active: row.last_active ?? row.started_at
+        }))
+
+      this.update({ sessions: [...merged, ...extra] })
+    } catch {
+      /* Live status is best-effort; the saved list stays authoritative. */
+    }
+  }
+  async loadSessions(query = this.listQuery, more = false) {
     const generation = ++this.listGeneration
-    const offset = more ? this.state.sessions.length : 0
+    this.listQuery = query
+    const offset = more ? this.savedOffset : 0
     this.update({ listLoading: true, listError: undefined })
 
     try {
@@ -262,7 +323,10 @@ export class MobileController {
           ).values()
         ]
 
-        this.update({ sessions: rows, total: rows.length })
+        this.savedQuery = query
+        this.savedRows = rows
+        this.savedOffset = rows.length
+        this.update({ sessions: rows, total: rows.length, hasMoreSessions: false })
       } else {
         const result = await this.api.request<{ sessions: SessionRow[]; total: number }>(
           `/api/sessions?profile=${this.profile}&limit=40&offset=${offset}&min_messages=0&archived=exclude&order=recent`
@@ -272,11 +336,15 @@ export class MobileController {
           return
         }
 
+        this.savedQuery = query
+        this.savedRows = [
+          ...new Map([...(more ? this.savedRows : []), ...result.sessions].map(s => [s.id, s])).values()
+        ]
+        this.savedOffset = offset + result.sessions.length
         this.update({
-          sessions: [
-            ...new Map([...(more ? this.state.sessions : []), ...result.sessions].map(s => [s.id, s])).values()
-          ],
-          total: result.total
+          sessions: this.savedRows,
+          total: result.total,
+          hasMoreSessions: result.sessions.length > 0 && this.savedOffset < result.total
         })
       }
     } catch (error) {
@@ -290,6 +358,7 @@ export class MobileController {
     } finally {
       if (generation === this.listGeneration) {
         this.update({ listLoading: false })
+        void this.loadLiveSessions()
       }
     }
   }
@@ -406,7 +475,8 @@ export class MobileController {
         throw new Error('Invalid history identity')
       }
 
-      const tail = fromSnapshot({ session_id: current.liveId, messages: page.messages }).messages
+      const saved = fromSnapshot({ session_id: current.liveId, messages: page.messages })
+      const tail = saved.messages
       const firstId = tail.find(message => current.messages.some(existing => existing.id === message.id))?.id
       const boundary = firstId === undefined ? -1 : current.messages.findIndex(message => message.id === firstId)
       const tailIds = new Set(ids.map(String))
@@ -425,7 +495,18 @@ export class MobileController {
         return
       }
 
-      this.update({ conversation: { ...current, messages: [...prefix, ...tail] }, syncError: undefined })
+      const merged = { ...current, messages: [...prefix, ...tail] }
+
+      const conversation =
+        saved.todoRevision === undefined
+          ? merged
+          : applyEvent(merged, {
+              type: 'todo.updated',
+              session_id: current.liveId,
+              payload: { todos: saved.todos, revision: saved.todoRevision }
+            })
+
+      this.update({ conversation, syncError: undefined })
       this.savedVersion = { storedId: current.storedId, stamp, fetchedAt: Date.now() }
     } catch (error) {
       if (generation === this.openGeneration && !this.disposed) {

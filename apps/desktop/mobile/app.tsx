@@ -3,8 +3,6 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
-  Check,
-  ChevronDown,
   Folder,
   MessageSquare,
   Moon,
@@ -23,10 +21,12 @@ import { motion, useDragControls, useReducedMotion } from 'motion/react'
 import { Dialog } from 'radix-ui'
 import { type FormEvent, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Streamdown } from 'streamdown'
+import { useStickToBottom } from 'use-stick-to-bottom'
 
 import { BackdropImage } from '../src/components/ui/backdrop-image'
 import { Button } from '../src/components/ui/button'
 import { useMediaQuery } from '../src/hooks/use-media-query'
+import { extractImageRefs } from '../src/lib/embedded-images'
 
 import { AppearanceSettings } from './appearance-settings'
 import type { MobileController } from './controller'
@@ -34,7 +34,10 @@ import { type SessionRow } from './controller'
 import type { Message } from './conversation'
 import { draftKey, projectMatches, shouldSubmitKey, viewportGeometry } from './input'
 import { getWebLocale, syncDocumentLocale, tr, useWebLocale } from './localization'
+import { SessionImage } from './session-image'
 import { ResizableSidebar, useNavigationCollapsed } from './sidebar'
+import { TaskPanel } from './task-panel'
+import { ToolActivity, toolRuns } from './tool-activity'
 
 function saved(key: string) {
   try {
@@ -223,6 +226,33 @@ function SessionList({
             onClick={() => onOpen(row)}
           >
             <div className="session-row-top">
+              {row.live_status && row.live_status !== 'idle' ? (
+                <span
+                  aria-label={
+                    row.live_status === 'waiting'
+                      ? tr('需要你输入')
+                      : row.live_status === 'starting'
+                        ? tr('正在启动')
+                        : tr('会话运行中')
+                  }
+                  className={`session-live-dot ${row.live_status}`}
+                  role="status"
+                  title={
+                    row.live_status === 'waiting'
+                      ? tr('需要你输入')
+                      : row.live_status === 'starting'
+                        ? tr('正在启动')
+                        : tr('会话运行中')
+                  }
+                />
+              ) : row.live_lease ? (
+                <span
+                  aria-label={tr('后端已连接；运行状态未知')}
+                  className="session-live-dot leased"
+                  role="status"
+                  title={tr('后端已连接；运行状态未知')}
+                />
+              ) : null}
               <span>{row.title || row.preview || tr('未命名对话')}</span>
               <span>{relativeTime(row.last_active || row.started_at)}</span>
             </div>
@@ -232,7 +262,7 @@ function SessionList({
             </div>
           </button>
         ))}
-        {!query && state.sessions.length < state.total && (
+        {!query && state.hasMoreSessions && (
           <Button
             className="load-more"
             disabled={state.listLoading}
@@ -256,26 +286,23 @@ function SessionList({
 }
 
 function ToolMessage({ message }: { message: Message }) {
-  return (
-    <details className="tool-disclosure">
-      <summary>
-        <span className={message.streaming ? 'activity-dot pulsing' : 'tool-check'}>
-          {!message.streaming && <Check size={13} />}
-        </span>
-        <span>{message.name || tr('工具调用')}</span>
-        <span>{message.streaming ? tr('执行中') : tr('已完成')}</span>
-        <ChevronDown size={14} />
-      </summary>
-      <pre>{message.text}</pre>
-    </details>
-  )
+  return <ToolActivity messages={[message]} />
 }
 
 const mobileMarkdownComponents = { img: () => <span className="blocked-image">{tr('外部图片未自动载入')}</span> }
 
-function MessageBody({ message }: { message: Message }) {
+function MessageBody({
+  message,
+  controller,
+  sessionId
+}: {
+  message: Message
+  controller: MobileController
+  sessionId: string
+}) {
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState(false)
+  const images = message.role === 'user' ? extractImageRefs(message.text) : { cleanedText: message.text, refs: [] }
 
   if (message.role === 'tool') {
     return <ToolMessage message={message} />
@@ -292,9 +319,18 @@ function MessageBody({ message }: { message: Message }) {
           Hermes
         </div>
       )}
+      {images.refs.map(ref => (
+        <SessionImage
+          api={controller.api}
+          key={ref}
+          path={ref.slice(7)}
+          profile={controller.profile}
+          sessionId={sessionId}
+        />
+      ))}
       <div className="message-text" dir="auto">
         {message.role === 'user' ? (
-          message.text
+          images.cleanedText
         ) : (
           <Streamdown
             animated={false}
@@ -399,11 +435,17 @@ export function MobileApp({ controller }: { controller: MobileController }) {
 
   const [draft, setDraft] = useState('')
   const [localError, setLocalError] = useState('')
-  const [atBottom, setAtBottom] = useState(true)
+
+  const {
+    scrollRef: scroll,
+    contentRef,
+    isAtBottom: atBottom,
+    stopScroll,
+    scrollToBottom
+  } = useStickToBottom({ initial: 'instant', resize: 'instant' })
+
   const textarea = useRef<HTMLTextAreaElement>(null)
-  const scroll = useRef<HTMLDivElement>(null)
   const composing = useRef(false)
-  const stick = useRef(true)
   const draftScope = draftKey(controller.profile, state.conversation?.storedId ?? null)
   const draftScopeRef = useRef(draftScope)
   const draftRef = useRef('')
@@ -468,11 +510,6 @@ export function MobileApp({ controller }: { controller: MobileController }) {
       el.style.height = `${Math.min(el.scrollHeight, 160)}px`
     }
   }, [draft])
-  useLayoutEffect(() => {
-    if (stick.current && scroll.current) {
-      scroll.current.scrollTop = scroll.current.scrollHeight
-    }
-  }, [state.conversation?.messages, state.controls, state.opening])
   useEffect(() => {
     if (wide) {
       setDrawer(false)
@@ -489,9 +526,12 @@ export function MobileApp({ controller }: { controller: MobileController }) {
     navigation.current++
     save(draftScopeRef.current, draftRef.current)
     setDrawer(false)
-    stick.current = true
-    setAtBottom(true)
-    void controller.open(row.id)
+    const epoch = navigation.current
+    void controller.open(row.id).then(() => {
+      if (epoch === navigation.current) {
+        void scrollToBottom('instant')
+      }
+    })
   }
 
   const newChat = () => {
@@ -499,8 +539,7 @@ export function MobileApp({ controller }: { controller: MobileController }) {
     save(draftScopeRef.current, draftRef.current)
     controller.newChat()
     setDrawer(false)
-    stick.current = true
-    setAtBottom(true)
+    void scrollToBottom('instant')
   }
 
   const submit = async (event?: FormEvent, queue = false) => {
@@ -515,7 +554,9 @@ export function MobileApp({ controller }: { controller: MobileController }) {
     const epoch = navigation.current
     const wasNew = !state.conversation
 
-    const sent = await controller.send(submitted, queue ? 'queue' : 'normal')
+    const pendingSend = controller.send(submitted, queue ? 'queue' : 'normal')
+    void scrollToBottom('instant')
+    const sent = await pendingSend
 
     if (sent) {
       if (saved(key) === submitted) {
@@ -525,9 +566,6 @@ export function MobileApp({ controller }: { controller: MobileController }) {
       if (draftScopeRef.current === key && draftRef.current === submitted) {
         changeDraft('')
       }
-
-      stick.current = true
-      setAtBottom(true)
     } else if (wasNew && epoch === navigation.current && !draftRef.current) {
       changeDraft(submitted)
     }
@@ -665,15 +703,17 @@ export function MobileApp({ controller }: { controller: MobileController }) {
         )}
         <div
           className="transcript"
-          onScroll={e => {
-            const el = e.currentTarget
-            const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
-            stick.current = bottom
-            setAtBottom(bottom)
+          onScrollCapture={event => {
+            // Explicit return to the history start must win even during a resize/ACK frame.
+            const el = event.currentTarget
+
+            if (el.scrollTop === 0 && el.scrollHeight - el.clientHeight > 60) {
+              stopScroll()
+            }
           }}
           ref={scroll}
         >
-          <div className="thread-content">
+          <div className="thread-content" ref={contentRef}>
             {state.opening && (
               <div className="history-loading" role="status">
                 {tr('正在恢复对话…')}
@@ -711,9 +751,18 @@ export function MobileApp({ controller }: { controller: MobileController }) {
                 </div>
               </div>
             )}
-            {state.conversation?.messages.map(message => (
-              <MessageBody key={message.id} message={message} />
-            ))}
+            {toolRuns(state.conversation?.messages ?? []).map(group =>
+              group[0].role === 'tool' ? (
+                <ToolActivity key={group[0].id} messages={group} />
+              ) : (
+                <MessageBody
+                  controller={controller}
+                  key={group[0].id}
+                  message={group[0]}
+                  sessionId={state.conversation?.storedId ?? ''}
+                />
+              )
+            )}
             {state.controls.map(request => (
               <ControlCard controller={controller} key={String(request.id)} request={request} />
             ))}
@@ -730,9 +779,7 @@ export function MobileApp({ controller }: { controller: MobileController }) {
           <Button
             className="jump-bottom"
             onClick={() => {
-              stick.current = true
-              setAtBottom(true)
-              scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: reduced ? 'instant' : 'smooth' })
+              void scrollToBottom(reduced ? 'instant' : 'smooth')
             }}
             variant="outline"
           >
@@ -742,6 +789,7 @@ export function MobileApp({ controller }: { controller: MobileController }) {
         )}
         <footer className="composer-dock">
           <div className="composer-width">
+            <TaskPanel key={state.conversation?.storedId} todos={state.conversation?.todos ?? []} />
             {state.queued > 0 && (
               <p className="queue-note" role="status">
                 {tr('有已提交的排队消息；以服务器会话记录为准。')}
