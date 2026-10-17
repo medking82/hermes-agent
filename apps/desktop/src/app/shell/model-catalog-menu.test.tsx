@@ -31,7 +31,7 @@ import {
 import { $defaultReasoningEffort } from '@/store/session'
 import type { LocalRuntimeJob } from '@/types/hermes'
 
-import { ModelCatalogMenu, ModelMenuCloseContext, type ModelMenuController } from './model-catalog-menu'
+import { type ModelCatalogController, ModelCatalogMenu, ModelMenuCloseContext } from './model-catalog-menu'
 import { MODEL_MENU_ROW_AREA, type ModelMenuRowContribution } from './model-menu-row-decorations'
 
 // Radix calls these on open; jsdom doesn't implement them.
@@ -195,15 +195,30 @@ describe('the reasoning-effort badge (#51833)', () => {
 
 // A minimal controller — these tests are about the CATALOG's own behaviour
 // (what it lists, what it offers), not about what any host does with a pick.
-function renderMenu(current: Partial<ModelMenuController['current']> = {}) {
+it('keeps model-only hosts free of option submenus and remembered effort writes', async () => {
+  const applyPreset = vi.fn()
+  const select = renderMenu({}, { setOptions: undefined, applyPreset, presetFor: () => ({ effort: 'high' }) })
+  const row = await screen.findByRole('menuitem', { name: /Gemini 3\.1 Pro/ })
+  expect(row.getAttribute('aria-haspopup')).toBeNull()
+  expect(screen.queryByText('High')).toBeNull()
+  fireEvent.click(row)
+  await waitFor(() => expect(select).toHaveBeenCalledWith('gemini-3.1-pro', 'google'))
+  expect(applyPreset).not.toHaveBeenCalled()
+})
+
+function renderMenu(
+  current: Partial<ModelCatalogController['current']> = {},
+  overrides: Partial<ModelCatalogController> = {}
+) {
   const select = vi.fn()
 
-  const controller: ModelMenuController = {
+  const controller: ModelCatalogController = {
     applyPreset: vi.fn(),
     current: { effort: '', fast: false, model: '', provider: '', ...current },
     presetFor: () => ({}),
     select,
-    setOptions: vi.fn()
+    setOptions: vi.fn(),
+    ...overrides
   }
 
   const client: QueryClient = queryClient

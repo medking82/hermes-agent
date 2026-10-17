@@ -496,17 +496,72 @@ body {
   color: var(--mobile-muted);
   font-size: 0.625rem;
 }
-.model-picker-body {
-  display: grid;
-  gap: 16px;
-  min-height: 0;
-  overflow: auto;
-  padding: 20px;
+.mobile-model-menu {
+  display: flex;
+  flex-direction: column;
+  width: min(24rem, calc(100vw - 24px));
+  max-height: min(36rem, calc(100dvh - 24px), var(--radix-dropdown-menu-content-available-height));
+  overflow: hidden;
+  padding: 4px;
 }
-.model-picker-body select {
-  width: 100%;
-  min-width: 0;
+.mobile-model-menu > * {
+  flex-shrink: 0;
+}
+.mobile-model-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-inline-start: 8px;
+  font-size: 13px;
+}
+.mobile-model-menu > .overflow-y-auto {
+  flex: 1 1 auto;
+  min-height: 88px;
+  max-height: 45dvh;
+  overscroll-behavior: contain;
+}
+.mobile-model-menu [role='alert'],
+.mobile-model-menu [role='status'] {
+  padding: 8px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.mobile-model-menu input,
+.mobile-model-visibility input {
+  min-height: 44px;
   font-size: 16px;
+}
+.mobile-model-menu [role='menuitem'],
+.mobile-model-menu button,
+.mobile-model-visibility button:not([role='switch']):not([role='checkbox']),
+.mobile-model-visibility label {
+  min-height: 44px;
+}
+.mobile-model-menu button,
+.mobile-model-visibility button:not([role='switch']):not([role='checkbox']) {
+  min-width: 44px;
+}
+.mobile-model-visibility {
+  width: min(24rem, calc(100vw - 24px));
+  max-width: none;
+  max-height: calc(100dvh - 24px);
+}
+.mobile-model-visibility > div {
+  display: flex;
+  flex-direction: column;
+}
+.mobile-model-visibility > div > * {
+  flex-shrink: 0;
+}
+.mobile-model-visibility .overflow-y-auto {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 55dvh;
+  overscroll-behavior: contain;
+}
+.mobile-model-visibility [data-slot='dialog-header'] {
+  min-height: 56px;
+  padding-inline: 56px;
 }
 .composer-toolbar .send-button {
   min-height: 44px;

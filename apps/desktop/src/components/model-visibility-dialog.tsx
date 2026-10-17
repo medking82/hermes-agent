@@ -17,6 +17,7 @@ import { Plus, Search, X } from '@/lib/icons'
 import { modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
 import { displayModelName, modelDisplayParts } from '@/lib/model-status-label'
 import { foldIncludes, normalize } from '@/lib/text'
+import { cn } from '@/lib/utils'
 import { confirm } from '@/store/confirm'
 import {
   $customModels,
@@ -40,9 +41,11 @@ import {
 import { $collapsedProviders, toggleCollapsedProvider } from '@/store/provider-collapse'
 
 interface ModelVisibilityDialogProps {
+  className?: string
   gw?: HermesGateway
   onOpenChange: (open: boolean) => void
-  onOpenProviders: () => void
+  onOpenProviders?: () => void
+  request?: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
   open: boolean
   ownerConnectionId?: string
   profile?: string
@@ -50,12 +53,14 @@ interface ModelVisibilityDialogProps {
 }
 
 export function ModelVisibilityDialog({
+  className,
   gw,
   onOpenChange,
   onOpenProviders,
   open,
   ownerConnectionId,
   profile = 'default',
+  request,
   sessionId
 }: ModelVisibilityDialogProps) {
   const { t } = useI18n()
@@ -67,7 +72,7 @@ export function ModelVisibilityDialog({
 
   const modelOptions = useQuery({
     queryKey: modelOptionsQueryKey(profile, sessionId, ownerConnectionId),
-    queryFn: (): Promise<ModelOptionsResult> => requestModelOptions({ gateway: gw, profile, sessionId }),
+    queryFn: (): Promise<ModelOptionsResult> => requestModelOptions({ gateway: gw, profile, request, sessionId }),
     enabled: open
   })
 
@@ -121,7 +126,7 @@ export function ModelVisibilityDialog({
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent bodyClassName="gap-0 overflow-hidden p-0" className="max-w-xs">
+      <DialogContent bodyClassName="gap-0 overflow-hidden p-0" className={cn('max-w-xs', className)}>
         <DialogHeader className="px-3 pb-1 pt-3">
           <DialogTitle className="text-[0.8125rem]">{copy.title}</DialogTitle>
         </DialogHeader>
@@ -250,18 +255,20 @@ export function ModelVisibilityDialog({
         </div>
 
         <div className="flex items-center justify-between px-3 py-2">
-          <Button
-            className="-ml-2 text-(--ui-text-tertiary)"
-            onClick={() => {
-              onOpenChange(false)
-              onOpenProviders()
-            }}
-            size="xs"
-            type="button"
-            variant="text"
-          >
-            {copy.addProvider}
-          </Button>
+          {onOpenProviders && (
+            <Button
+              className="-ml-2 text-(--ui-text-tertiary)"
+              onClick={() => {
+                onOpenChange(false)
+                onOpenProviders()
+              }}
+              size="xs"
+              type="button"
+              variant="text"
+            >
+              {copy.addProvider}
+            </Button>
+          )}
           {/* Only once there is something to undo, like the sidebar view reset. */}
           {stored !== null && modelOptions.isSuccess && (
             <Button className="-mr-2" onClick={() => void resetToDefaults()} size="xs" type="button" variant="text">

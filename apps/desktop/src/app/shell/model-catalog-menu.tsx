@@ -145,14 +145,14 @@ export interface ModelChoice {
  * `presetFor` supplies the remembered settings shown on a non-active row.
  * Returning `{}` is fine — the row then shows Hermes' defaults.
  */
-export interface ModelMenuController {
+export interface ModelCatalogController {
   /** Detached task pickers can edit effort but have no speed write path. */
   allowSpeed?: boolean
   /** Restore a model's remembered settings after it is selected. Separate from
    *  `setOptions` because it is one atomic "apply this model's preset" write,
    *  not a user editing one control — surfaces that write through to a session
    *  need to batch it. Values are already capability-gated by the menu. */
-  applyPreset: (
+  applyPreset?: (
     preset: { effort?: string; fast?: boolean; serviceTier?: string },
     row: { model: string; provider: string }
   ) => void
@@ -160,15 +160,22 @@ export interface ModelMenuController {
   presetFor: (provider: string, model: string) => { effort?: string; fast?: boolean; serviceTier?: string }
   /** Commit a model row. Return false to abort (a failed session switch). */
   select: (model: string, provider: string) => Promise<boolean | void> | void
-  /** Edit ONE option on a row. `isActive` says whether it's the current model. */
-  setOptions: (
+  /** Edit ONE option on a row. Omit for model-only hosts: no options UI or
+   *  remembered effort/speed writes. `isActive` identifies the current model. */
+  setOptions?: (
     patch: { effort?: string; fast?: boolean; serviceTier?: string },
     row: { isActive: boolean; model: string; provider: string }
   ) => void
 }
 
+/** Desktop option editors keep their existing required write capabilities. */
+export interface ModelMenuController extends ModelCatalogController {
+  applyPreset: NonNullable<ModelCatalogController['applyPreset']>
+  setOptions: NonNullable<ModelCatalogController['setOptions']>
+}
+
 interface ModelCatalogMenuProps {
-  controller: ModelMenuController
+  controller: ModelCatalogController
   /** Rows appended under the catalog (Refresh Models, Edit Models, …). */
   footer?: ReactNode
   /** Rows above the search, outside the keyboard list (the local-setup offer). */
@@ -420,7 +427,7 @@ export function ModelCatalogMenu({
 
   const selectFamily = async (family: ModelFamily, provider: ModelOptionProvider): Promise<boolean> => {
     const caps = provider.capabilities?.[family.id]
-    const preset = controller.presetFor(provider.slug, family.id)
+    const preset = controller.setOptions ? controller.presetFor(provider.slug, family.id) : {}
 
     // Variant-fast models (no speed param) express "fast" as a separate `-fast`
     // id, so honor the remembered preset by selecting that sibling. Param-fast
@@ -443,13 +450,15 @@ export function ModelCatalogMenu({
           ? 'priority'
           : 'normal'
 
-    controller.applyPreset(
-      {
-        effort: (caps?.reasoning ?? true) ? (preset.effort ?? defaultEffort) : undefined,
-        ...(controller.allowSpeed !== false ? { serviceTier: tier, fast: tier !== 'normal' } : {})
-      },
-      { model: family.id, provider: provider.slug }
-    )
+    if (controller.setOptions) {
+      controller.applyPreset?.(
+        {
+          effort: (caps?.reasoning ?? true) ? (preset.effort ?? defaultEffort) : undefined,
+          ...(controller.allowSpeed !== false ? { serviceTier: tier, fast: tier !== 'normal' } : {})
+        },
+        { model: family.id, provider: provider.slug }
+      )
+    }
 
     return true
   }
@@ -608,7 +617,7 @@ export function ModelCatalogMenu({
   const openActiveSubmenu = (): boolean => {
     const trigger = listRef.current?.querySelector<HTMLElement>('[data-kb-active]')
 
-    if (!trigger || !kbActiveKey) {
+    if (!trigger || !kbActiveKey || trigger.getAttribute('aria-haspopup') !== 'menu') {
       return false
     }
 
@@ -964,7 +973,7 @@ function resolveFavoriteRows(providers: readonly ModelOptionProvider[], keys: re
 }
 
 interface ModelFamilyRowProps {
-  controller: ModelMenuController
+  controller: ModelCatalogController
   current: ModelChoice
   defaultEffort: string
   family: ModelFamily
@@ -1009,11 +1018,7 @@ function ModelFamilyRow({
 
   // The active id may be the base or its -fast sibling; either way this one
   // family row represents both.
-  const activeId =
-    catalogProviderMatches(provider, current.provider) &&
-    (current.model === family.id || current.model === family.fastId)
-      ? current.model
-      : null
+  const activeId = activeFamilyModel(provider, family, current)
 
   const isCurrent = activeId !== null
   const { name, tag } = modelDisplayParts(family.id)
@@ -1033,7 +1038,7 @@ function ModelFamilyRow({
   // Effective settings for this row: the live choice when it's the active
   // model, otherwise its remembered preset. Row label AND submenu read from
   // these so they never disagree.
-  const preset = controller.presetFor(provider.slug, family.id)
+  const preset = controller.setOptions ? controller.presetFor(provider.slug, family.id) : {}
   const effEffort = isCurrent ? current.effort : (preset.effort ?? '')
   const effFast = isCurrent ? current.fast : (preset.fast ?? false)
   const effTier = isCurrent ? current.serviceTier : preset.serviceTier
@@ -1080,10 +1085,11 @@ function ModelFamilyRow({
   }
 
   const favoriteLabel = favorite ? copy.removeFavorite : copy.addFavorite
+  const Trigger = controller.setOptions ? DropdownMenuSubTrigger : DropdownMenuItem
 
   return (
     <DropdownMenuSub onOpenChange={open => onSubOpenChange?.(open, rowKey)}>
-      <DropdownMenuSubTrigger
+      <Trigger
         onClick={event => {
           // Shift-click stars, the same gesture that pins a chat row in the
           // sidebar. Nothing is picked and the menu stays open, so a second
@@ -1099,9 +1105,11 @@ function ModelFamilyRow({
         }}
         onKeyDown={event => {
           if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
             activate()
           }
         }}
+        onSelect={event => event.preventDefault()}
         {...kbProps}
         className={cn(kbProps.className, 'group/model')}
       >
@@ -1161,26 +1169,35 @@ function ModelFamilyRow({
           </ModelChip>
         ))}
         {isCurrent ? <Codicon className="text-foreground" name="check" size="0.75rem" /> : null}
-      </DropdownMenuSubTrigger>
-      <ModelEditSubmenu
-        canDisableReasoning={caps?.can_disable_reasoning ?? undefined}
-        defaultEffort={defaultEffort}
-        effort={effEffort}
-        effortWire={isCurrent ? current.effortWire : undefined}
-        fastControl={fastControl}
-        isActive={isCurrent}
-        model={family.id}
-        onSelectModel={nextModel => controller.select(nextModel, provider.slug)}
-        onSetOptions={patch =>
-          controller.setOptions(patch, { isActive: isCurrent, model: family.id, provider: provider.slug })
-        }
-        provider={provider.slug}
-        reasoning={caps?.reasoning ?? true}
-        serviceTier={effTier}
-        ultrafastSupported={controller.allowSpeed !== false && (caps?.ultrafast ?? false)}
-      />
+      </Trigger>
+      {controller.setOptions && (
+        <ModelEditSubmenu
+          canDisableReasoning={caps?.can_disable_reasoning ?? undefined}
+          defaultEffort={defaultEffort}
+          effort={effEffort}
+          effortWire={isCurrent ? current.effortWire : undefined}
+          fastControl={fastControl}
+          isActive={isCurrent}
+          model={family.id}
+          onSelectModel={nextModel => controller.select(nextModel, provider.slug)}
+          onSetOptions={patch =>
+            controller.setOptions?.(patch, { isActive: isCurrent, model: family.id, provider: provider.slug })
+          }
+          provider={provider.slug}
+          reasoning={caps?.reasoning ?? true}
+          serviceTier={effTier}
+          ultrafastSupported={controller.allowSpeed !== false && (caps?.ultrafast ?? false)}
+        />
+      )}
     </DropdownMenuSub>
   )
+}
+
+function activeFamilyModel(provider: ModelOptionProvider, family: ModelFamily, current: ModelChoice): string | null {
+  return catalogProviderMatches(provider, current.provider) &&
+    (current.model === family.id || current.model === family.fastId)
+    ? current.model
+    : null
 }
 
 /** True when the text cursor sits at the very end with nothing selected — the

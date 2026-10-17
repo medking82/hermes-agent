@@ -1,21 +1,49 @@
 import type { ModelOptionsResult } from '@hermes/shared'
+import { useStore } from '@nanostores/react'
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { ChevronDown, X } from 'lucide-react'
-import { Dialog } from 'radix-ui'
-import { useEffect, useState } from 'react'
+import { useRef, useState } from 'react'
 
+import {
+  type ModelCatalogController,
+  ModelCatalogMenu,
+  ModelMenuCloseContext
+} from '../src/app/shell/model-catalog-menu'
+import { ConfirmHost } from '../src/components/confirm-host'
+import { ModelVisibilityDialog } from '../src/components/model-visibility-dialog'
 import { Button } from '../src/components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '../src/components/ui/dropdown-menu'
+import { I18nProvider } from '../src/i18n'
+import { modelOptionsQueryKey } from '../src/lib/model-options'
+import { displayModelName } from '../src/lib/model-status-label'
+import { $modelVisibilityOpen, setModelVisibilityOpen } from '../src/store/model-visibility'
 
 import type { MobileController, MobileState } from './controller'
 import { tr, useWebLocale } from './localization'
 
-export function ModelPicker({ controller, state }: { controller: MobileController; state: MobileState }) {
-  useWebLocale()
+interface PickerProps {
+  controller: MobileController
+  state: MobileState
+}
+
+export function ModelPicker({ controller, state }: PickerProps) {
+  const locale = useWebLocale()
   const [open, setOpen] = useState(false)
-  const [catalog, setCatalog] = useState<ModelOptionsResult>()
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [value, setValue] = useState('')
-  const [attempt, setAttempt] = useState(0)
+  const visibilityOpen = useStore($modelVisibilityOpen)
+  const request = catalogRequest(controller)
+
+  const [client] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            retry: false,
+            staleTime: Infinity,
+            refetchOnWindowFocus: false
+          }
+        }
+      })
+  )
 
   const disabled =
     state.connection !== 'ready' ||
@@ -25,144 +53,148 @@ export function ModelPicker({ controller, state }: { controller: MobileControlle
     Boolean(state.uncertain) ||
     Boolean(state.conversation?.running)
 
-  useEffect(() => {
-    if (!open) {
-      return
+  const model = state.conversation?.model || state.draftModel?.model
+
+  const changeOpen = (next: boolean) => {
+    if (next) {
+      client.clear()
     }
-    let cancelled = false
-    setLoading(true)
-    setError('')
-    setCatalog(undefined)
-    setValue('')
-    void controller
-      .modelOptions()
-      .then(result => {
-        if (cancelled) {
-          return
-        }
-        setCatalog(result)
-        const current = state.conversation ? result : (state.draftModel ?? result)
-        setValue(JSON.stringify([current.provider, current.model]))
-      })
-      .catch(reason => {
-        if (!cancelled) {
-          setError(reason instanceof Error ? reason.message : '模型列表加载失败，请重试。')
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoading(false)
-        }
-      })
 
-    return () => {
-      cancelled = true
+    setOpen(next)
+  }
+
+  return (
+    <I18nProvider configClient={null} initialLocale={locale} key={locale}>
+      <QueryClientProvider client={client}>
+        <DropdownMenu onOpenChange={changeOpen} open={open}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              aria-label={tr('选择模型')}
+              className="model-trigger"
+              disabled={disabled}
+              title={disabled ? tr('连接恢复且任务结束后才能切换模型。') : tr('选择模型')}
+              type="button"
+              variant="ghost"
+            >
+              <span className="model-label">{model ? displayModelName(model) : tr('沿用后端默认模型')}</span>
+              <ChevronDown aria-hidden size={14} />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" aria-label={tr('选择模型')} className="mobile-model-menu" side="top">
+            <header className="mobile-model-header">
+              <strong>{tr('选择模型')}</strong>
+              <Button
+                aria-label={tr('关闭提示')}
+                onClick={() => setOpen(false)}
+                size="icon"
+                type="button"
+                variant="ghost"
+              >
+                <X />
+              </Button>
+            </header>
+            <Catalog close={() => setOpen(false)} controller={controller} request={request} state={state} />
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <ModelVisibilityDialog
+          className="mobile-model-visibility"
+          onOpenChange={setModelVisibilityOpen}
+          open={visibilityOpen}
+          profile={controller.profile}
+          request={request}
+          sessionId={state.conversation?.liveId}
+        />
+        <ConfirmHost />
+      </QueryClientProvider>
+    </I18nProvider>
+  )
+}
+
+function catalogRequest(controller: MobileController) {
+  return async <T,>(method: string): Promise<T> => {
+    if (method !== 'model.options') {
+      throw new Error('Unsupported catalog operation')
     }
-    // A session-keyed component owns the picker. Reopen/retry refreshes its catalog.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controller, open, attempt])
 
-  const providers =
-    catalog?.providers?.filter(provider => provider.authenticated !== false && provider.models?.length) ?? []
+    const result = await controller.modelOptions()
 
-  const selected = providers
-    .flatMap(provider => (provider.models ?? []).map(model => ({ model, provider: provider.slug })))
-    .find(option => JSON.stringify([option.provider, option.model]) === value)
+    return { ...result, providers: result.providers?.filter(provider => provider.authenticated !== false) } as T
+  }
+}
 
-  const apply = async () => {
-    if (!selected || disabled) {
-      return
-    }
-    setError('')
+function Catalog({
+  controller,
+  state,
+  close,
+  request
+}: PickerProps & { close: () => void; request: ReturnType<typeof catalogRequest> }) {
+  const [error, setError] = useState('')
+  const pending = useRef(false)
+  const sessionId = state.conversation?.liveId
 
-    try {
-      await controller.selectModel(selected)
-      setOpen(false)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '模型切换失败，请重试。')
+  const options = useQuery({
+    queryKey: modelOptionsQueryKey(controller.profile, sessionId),
+    queryFn: () => request<ModelOptionsResult>('model.options')
+  })
+
+  const current = state.conversation ? options.data : (state.draftModel ?? options.data)
+
+  const menu: ModelCatalogController = {
+    allowSpeed: false,
+    current: {
+      model: current?.model ?? '',
+      provider: current?.provider ?? '',
+      effort: '',
+      effortPending: true,
+      fast: false
+    },
+    presetFor: () => ({}),
+
+    select: async (model, provider) => {
+      if (pending.current) {
+        return false
+      }
+
+      pending.current = true
+      setError('')
+
+      try {
+        await controller.selectModel({ model, provider })
+        close()
+
+        return true
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : tr('模型切换失败，请重试。'))
+
+        return false
+      } finally {
+        pending.current = false
+      }
     }
   }
 
   return (
-    <Dialog.Root onOpenChange={setOpen} open={open}>
-      <Dialog.Trigger asChild>
-        <Button
-          aria-label={tr('选择模型')}
-          className="model-trigger"
-          disabled={disabled}
-          title={disabled ? tr('连接恢复且任务结束后才能切换模型。') : tr('选择模型')}
-          type="button"
-          variant="ghost"
-        >
-          <span className="model-label">
-            {state.conversation?.model || state.draftModel?.model || tr('沿用后端默认模型')}
-          </span>
-          <ChevronDown aria-hidden size={14} />
-        </Button>
-      </Dialog.Trigger>
-      <Dialog.Portal>
-        <Dialog.Overlay className="appearance-overlay" />
-        <Dialog.Content className="appearance-panel">
-          <header className="appearance-header">
-            <Dialog.Title>{tr('选择模型')}</Dialog.Title>
-            <Dialog.Close asChild>
-              <Button aria-label={tr('关闭提示')} className="mobile-icon" size="icon" type="button" variant="ghost">
-                <X />
-              </Button>
-            </Dialog.Close>
-          </header>
-          <div className="model-picker-body">
-            <Dialog.Description>{tr('只影响此对话，不修改全局默认模型；不会发送消息。')}</Dialog.Description>
-            {loading ? (
-              <p role="status">{tr('正在加载模型…')}</p>
-            ) : (
-              <>
-                {providers.length ? (
-                  <>
-                    <label htmlFor="mobile-model">{tr('模型')}</label>
-                    <select
-                      disabled={disabled}
-                      id="mobile-model"
-                      onChange={event => setValue(event.target.value)}
-                      value={selected ? value : ''}
-                    >
-                      <option disabled value="">
-                        {tr('选择模型')}
-                      </option>
-                      {providers.map(provider => (
-                        <optgroup key={provider.slug} label={provider.name}>
-                          {provider.models?.map(model => (
-                            <option
-                              disabled={provider.unavailable_models?.includes(model)}
-                              key={model}
-                              value={JSON.stringify([provider.slug, model])}
-                            >
-                              {model}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))}
-                    </select>
-                  </>
-                ) : (
-                  !error && <p role="status">{tr('没有可用的已配置模型。')}</p>
-                )}
-              </>
-            )}
-            {error && (
-              <div role="alert">
-                <p>{tr(error)}</p>
-                <Button onClick={() => setAttempt(n => n + 1)} type="button" variant="ghost">
-                  {tr('重试')}
-                </Button>
-              </div>
-            )}
-            <Button disabled={disabled || loading || !selected} onClick={() => void apply()} type="button">
-              {tr(state.modelChanging ? '正在切换模型…' : '应用模型')}
-            </Button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <ModelMenuCloseContext.Provider
+      value={() => {
+        if (!pending.current) {
+          close()
+        }
+      }}
+    >
+      {options.isPending ? (
+        <p role="status">{tr('正在加载模型…')}</p>
+      ) : options.error ? (
+        <div role="alert">
+          <p>{options.error.message}</p>
+          <Button onClick={() => void options.refetch()} type="button" variant="ghost">
+            {tr('重试')}
+          </Button>
+        </div>
+      ) : (
+        <ModelCatalogMenu controller={menu} profile={controller.profile} request={request} sessionId={sessionId} />
+      )}
+      {error && <p role="alert">{tr(error)}</p>}
+      {state.modelChanging && <p role="status">{tr('正在切换模型…')}</p>}
+    </ModelMenuCloseContext.Provider>
   )
 }

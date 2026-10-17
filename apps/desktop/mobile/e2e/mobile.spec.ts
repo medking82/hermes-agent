@@ -14,7 +14,7 @@ test.beforeEach(async ({ page }) => {
 })
 
 // SYNTHETIC FIXTURES: do not mistake these for real backend/model acceptance.
-async function fixture(page: Page, long = false, rich = false) {
+async function fixture(page: Page, long = false, rich = false, models = ['fixture-model', 'fixture-alternative']) {
   let submits = 0
   let connections = 0
   let model = 'fixture-model'
@@ -120,9 +120,7 @@ async function fixture(page: Page, long = false, rich = false) {
         result = {
           model,
           provider: 'fixture-provider',
-          providers: [
-            { slug: 'fixture-provider', name: 'Fixture Provider', models: ['fixture-model', 'fixture-alternative'] }
-          ]
+          providers: [{ slug: 'fixture-provider', name: 'Fixture Provider', models }]
         }
       }
 
@@ -245,17 +243,15 @@ test('selects a session model on desktop and touch layouts without sending or lo
     await trigger.click()
   }
 
-  const dialog = page.getByRole('dialog', { name: '选择模型' })
+  const dialog = page.getByRole('menu', { name: '选择模型' })
   await expect(dialog).toBeVisible()
-  await page
-    .getByRole('combobox', { name: '模型', exact: true })
-    .selectOption(JSON.stringify(['fixture-provider', 'fixture-alternative']))
+  await expect(page.getByRole('textbox', { name: '搜索模型', exact: true })).toBeVisible()
   expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
   await page.screenshot({ path: info.outputPath('model-picker.png') })
-  await page.getByRole('button', { name: '应用模型' }).click()
+  await page.getByRole('menuitem', { name: /Fixture Alternative/i }).click()
   await expect(dialog).toBeHidden()
-  await expect(trigger).toContainText('fixture-alternative')
+  await expect(trigger).toContainText('Fixture Alternative')
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toHaveValue('保留文字和照片')
   await expect(page.getByText('photo.png', { exact: true })).toBeVisible()
   expect(uploads).toBe(1)
@@ -269,6 +265,73 @@ test('selects a session model on desktop and touch layouts without sending or lo
     }
   ])
   await page.screenshot({ path: info.outputPath('model-selected-photo-retained.png') })
+})
+
+test('bounds the shared catalog and keeps local model preferences usable on short touch screens', async ({
+  page
+}, info) => {
+  const backend = await fixture(
+    page,
+    false,
+    false,
+    Array.from({ length: 40 }, (_, i) => `fixture-catalog-${String(i).padStart(2, '0')}`)
+  )
+
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.setViewportSize({ width: 360, height: 440 })
+  await page.goto('/mobile/')
+  const trigger = page.getByRole('button', { name: '选择模型', exact: true })
+  await expect(trigger).toBeEnabled()
+  await trigger.click()
+  const menu = page.getByRole('menu', { name: '选择模型' })
+  const search = menu.getByRole('textbox', { name: '搜索模型' })
+  await search.fill('fixture catalog')
+  const row = menu.getByRole('menuitem', { name: /Fixture Catalog 00/i })
+  await expect(row).toBeVisible()
+  expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+  const star = row.getByRole('button')
+  expect((await star.boundingBox())!.width).toBeGreaterThanOrEqual(44)
+  await star.click()
+  await expect(menu).toBeVisible()
+  await search.fill('')
+  await expect(menu.getByText('收藏', { exact: true })).toBeVisible()
+  await search.fill('fixture catalog')
+  const list = menu.locator(':scope > .overflow-y-auto')
+  expect(await list.evaluate(el => el.scrollHeight > el.clientHeight && el.clientHeight >= 88)).toBe(true)
+  await list.evaluate(el => {
+    el.scrollTop = el.scrollHeight
+  })
+  await expect(menu.getByRole('menuitem', { name: /Fixture Catalog 39/i })).toBeInViewport()
+  const bounds = await menu.boundingBox()
+  expect(bounds!.x).toBeGreaterThanOrEqual(0)
+  expect(bounds!.y).toBeGreaterThanOrEqual(0)
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(361)
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(441)
+  expect(await menu.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
+  await page.screenshot({ path: info.outputPath('catalog-bounded-scroll.png') })
+  await menu.getByRole('button', { name: '关闭提示' }).click()
+  await expect(trigger).toBeFocused()
+  await trigger.click()
+  await menu.getByText('编辑模型…', { exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '模型', exact: true })
+  const toggle = dialog.getByRole('switch', { name: 'Fixture Catalog 01', exact: true })
+  await expect(toggle).toBeChecked()
+  await toggle.click()
+  await expect(toggle).not.toBeChecked()
+  expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
+  const editBounds = await dialog.boundingBox()
+  expect(editBounds!.y).toBeGreaterThanOrEqual(0)
+  expect(editBounds!.y + editBounds!.height).toBeLessThanOrEqual(441)
+  await page.screenshot({ path: info.outputPath('catalog-local-preferences.png') })
+  await page.reload()
+  await expect(trigger).toBeEnabled()
+  await trigger.click()
+  await expect(menu.getByText('收藏', { exact: true })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: /Fixture Catalog 01/i })).toHaveCount(0)
+  expect(backend.submits()).toBe(0)
+  expect(backend.modelChanges()).toEqual([])
+  expect(errors).toEqual([])
 })
 
 test('offers a return to mobile chat in the actual Dashboard bundle without starting work', async ({ page }, info) => {

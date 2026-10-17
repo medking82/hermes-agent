@@ -1,6 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { setFavoriteModels } from '../src/store/favorite-models'
+import { $knownModels, $visibleModels, setModelVisibilityOpen, setVisibleModels } from '../src/store/model-visibility'
+import { $collapsedProviders } from '../src/store/provider-collapse'
+
 import { MobileApp } from './app'
 import { MobileController } from './controller'
 import { setWebLocale } from './localization'
@@ -14,6 +18,15 @@ const catalog = {
 }
 
 beforeEach(() => {
+  $visibleModels.set(null)
+  $knownModels.set(null)
+  $collapsedProviders.set([])
+  setFavoriteModels([])
+  setModelVisibilityOpen(false)
+  vi.stubGlobal('PointerEvent', MouseEvent)
+  Element.prototype.scrollIntoView = vi.fn()
+  Element.prototype.hasPointerCapture = vi.fn(() => false)
+  Element.prototype.releasePointerCapture = vi.fn()
   setWebLocale('zh')
   vi.stubGlobal(
     'ResizeObserver',
@@ -79,6 +92,51 @@ function setup() {
   return { controller, rpc, api, snapshot }
 }
 
+it('uses the Desktop favorites and visibility while search still reaches hidden models', async () => {
+  setWebLocale('en')
+  setVisibleModels(new Set(['fixture-provider::fixture-original']), catalog.providers)
+  setFavoriteModels(['fixture-provider::fixture-original'])
+  const { controller, rpc } = setup()
+
+  try {
+    await waitFor(() => expect(controller.getSnapshot().connection).toBe('ready'))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Choose Model' }), { button: 0, ctrlKey: false })
+    const search = await screen.findByRole('textbox', { name: /search models/i })
+    expect(await screen.findByText('Favorites')).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: /fixture alternative/i })).toBeNull()
+    fireEvent.change(search, { target: { value: 'alternative' } })
+    fireEvent.click(await screen.findByRole('menuitem', { name: /fixture alternative/i }))
+    await waitFor(() => expect(controller.getSnapshot().draftModel?.model).toBe('fixture-alternative'))
+    expect(
+      rpc.request.mock.calls.filter(([method]) => ['config.set', 'session.create', 'prompt.submit'].includes(method))
+    ).toHaveLength(0)
+  } finally {
+    controller.dispose()
+  }
+})
+
+it('opens the shared Edit Models dialog and persists its local shortlist without a model write', async () => {
+  setWebLocale('en')
+  const { controller, rpc } = setup()
+
+  try {
+    await waitFor(() => expect(controller.getSnapshot().connection).toBe('ready'))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Choose Model' }), { button: 0, ctrlKey: false })
+    fireEvent.click(await screen.findByText('Edit models…'))
+    const dialog = await screen.findByRole('dialog', { name: 'Models' })
+    expect(dialog).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /add provider/i })).toBeNull()
+    const checkbox = screen.getByRole('switch', { name: /fixture alternative/i })
+    fireEvent.click(checkbox)
+    expect($visibleModels.get()).not.toContain('fixture-provider::fixture-alternative')
+    expect(
+      rpc.request.mock.calls.filter(([method]) => ['config.set', 'session.create', 'prompt.submit'].includes(method))
+    ).toHaveLength(0)
+  } finally {
+    controller.dispose()
+  }
+})
+
 it('switches only the selected saved session and keeps the old model on rejection', async () => {
   const { controller, rpc } = setup()
 
@@ -88,7 +146,7 @@ it('switches only the selected saved session and keeps the old model on rejectio
       await controller.open('saved')
     })
     await chooseAlternative()
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: '选择模型' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('menu', { name: '选择模型' })).toBeNull())
     expect(rpc.request).toHaveBeenCalledWith('config.set', {
       session_id: 'saved',
       profile: 'default',
@@ -218,12 +276,12 @@ it('allows catalog retry and cancel without sending or changing defaults', async
   try {
     await waitFor(() => expect(controller.getSnapshot().connection).toBe('ready'))
     rpc.request.mockRejectedValueOnce(new Error('Catalog unavailable'))
-    fireEvent.click(screen.getByRole('button', { name: '选择模型' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: '选择模型' }), { button: 0, ctrlKey: false })
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Catalog unavailable'))
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
-    await screen.findByRole('combobox', { name: '模型' })
+    await screen.findByRole('textbox', { name: '搜索模型' })
     fireEvent.click(screen.getByRole('button', { name: '关闭提示' }))
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('menu', { name: '选择模型' })).toBeNull())
     expect(controller.getSnapshot().draftModel).toBeUndefined()
     expect(
       rpc.request.mock.calls.filter(([method]) => ['config.set', 'prompt.submit', 'session.create'].includes(method))
@@ -234,11 +292,8 @@ it('allows catalog retry and cancel without sending or changing defaults', async
 })
 
 async function chooseAlternative() {
-  fireEvent.click(screen.getByRole('button', { name: '选择模型' }))
-  const select = await screen.findByRole('combobox', { name: '模型' })
-  await waitFor(() => expect(screen.getByRole('option', { name: 'fixture-alternative' })).toBeTruthy())
-  fireEvent.change(select, { target: { value: JSON.stringify(['fixture-provider', 'fixture-alternative']) } })
-  fireEvent.click(screen.getByRole('button', { name: '应用模型' }))
+  fireEvent.pointerDown(screen.getByRole('button', { name: '选择模型' }), { button: 0, ctrlKey: false })
+  fireEvent.click(await screen.findByRole('menuitem', { name: /fixture alternative/i }))
 }
 
 it('selects a draft model through the composer without starting work or losing the uploaded photo', async () => {
@@ -254,8 +309,8 @@ it('selects a draft model through the composer without starting work or losing t
       expect((screen.getByRole('button', { name: '发送消息' }) as HTMLButtonElement).disabled).toBe(false)
     )
     await chooseAlternative()
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: '选择模型' })).toBeNull())
-    expect(screen.getByRole('button', { name: '选择模型' }).textContent).toContain('fixture-alternative')
+    await waitFor(() => expect(screen.queryByRole('menu', { name: '选择模型' })).toBeNull())
+    expect(screen.getByRole('button', { name: '选择模型' }).textContent).toContain('Fixture Alternative')
     expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('保留草稿')
     expect(screen.getByText('photo.png')).toBeTruthy()
     expect(rpc.request).toHaveBeenCalledWith('model.options', {
