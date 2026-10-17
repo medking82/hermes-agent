@@ -40,14 +40,18 @@ export class BrowserApi {
     return response.json() as Promise<T>
   }
 
-  async socketUrl(): Promise<string> {
+  async socketUrl(path: '/api/ws' | '/api/plugins/neo-mobile-web/security/ws' = '/api/ws'): Promise<string> {
+    if (!['/api/ws', '/api/plugins/neo-mobile-web/security/ws'].includes(path)) {
+      throw new Error('Unsupported WebSocket endpoint')
+    }
+
     const { ticket } = await this.request<{ ticket: string }>('/api/auth/ws-ticket', { method: 'POST' })
 
     if (!ticket) {
       throw new Error('后端没有返回连接凭证')
     }
 
-    const url = new URL('/api/ws', this.origin)
+    const url = new URL(path, this.origin)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     url.searchParams.set('ticket', ticket)
 

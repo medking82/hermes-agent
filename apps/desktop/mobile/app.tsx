@@ -37,6 +37,7 @@ import { draftKey, shouldSubmitKey, viewportGeometry } from './input'
 import { getWebLocale, syncDocumentLocale, tr, useWebLocale } from './localization'
 import { ModelPicker } from './model-picker'
 import { MAX_PHOTOS, PHOTO_ACCEPT, photoMessage, usePhotoDraft } from './photo-draft'
+import { SecurityPanel } from './security'
 import { matchesSession, runtimeStatus, type SessionFilters } from './session-filters'
 import { SessionImage } from './session-image'
 import { ResizableSidebar, useNavigationCollapsed } from './sidebar'
@@ -559,6 +560,13 @@ function ControlCard({ request, controller }: { request: ServerRequest; controll
   )
 }
 
+function readDarkAppearance() {
+  return (
+    saved('hermes-web:appearance') === 'dark' ||
+    (!saved('hermes-web:appearance') && window.matchMedia?.('(prefers-color-scheme: dark)').matches)
+  )
+}
+
 export function MobileApp({ controller }: { controller: MobileController }) {
   const locale = useWebLocale()
   useEffect(() => syncDocumentLocale(locale), [locale])
@@ -569,11 +577,7 @@ export function MobileApp({ controller }: { controller: MobileController }) {
   const drag = useDragControls()
   const [drawer, setDrawer] = useState(false)
 
-  const [dark, setDark] = useState(
-    () =>
-      saved('hermes-web:appearance') === 'dark' ||
-      (!saved('hermes-web:appearance') && window.matchMedia?.('(prefers-color-scheme: dark)').matches)
-  )
+  const [dark, setDark] = useState(readDarkAppearance)
 
   const [draft, setDraft] = useState('')
   const [localError, setLocalError] = useState('')
@@ -805,6 +809,7 @@ export function MobileApp({ controller }: { controller: MobileController }) {
               onNavigate={() => save(draftScopeRef.current, draftRef.current)}
               profile={controller.profile}
             />
+            <SecurityPanel api={controller.api} enabled={ready} key={draftScope} />
             <AppearanceSettings />
             <IconButton label={dark ? tr('切换浅色') : tr('切换深色')} onClick={() => setDark(!dark)}>
               {dark ? <Sun /> : <Moon />}

@@ -102,6 +102,54 @@ def switch_entry(expected, desired):
         temporary.unlink(missing_ok=True)
 
 
+def reconcile_plugin(reverse=False):
+    """Replace only the pinned router on disk; coordinator owns runtime activation."""
+    plan = checked_plan()
+    old, new = plan.get('previous_plugin_manifest', {}), plan['plugin_manifest']
+    name = 'dashboard/plugin_api.py'
+    if set(old) != set(new) or {k for k in new if old.get(k) != new[k]} != {name}:
+        raise RuntimeError('Only an explicitly pinned router replacement is supported')
+    if (inventory(HOME / 'plugin') != new
+            or inventory(HOME / 'plugin-previous') != old):
+        raise RuntimeError('Frozen plugin preimage or candidate changed')
+    previous = plan.get('previous_release')
+    verify_release(previous, plan['previous_manifest'])
+    current = SITE_ROOT / 'current'
+    if not current.is_symlink() or os.readlink(current) != 'releases/' + previous:
+        raise RuntimeError('Restore/retain the approved previous static release before router replacement')
+    expected, desired = (new, old) if reverse else (old, new)
+    verify_plugin({'plugin_manifest': expected})
+    source = HOME / ('plugin-previous' if reverse else 'plugin') / name
+    target = SITE_ROOT / name
+    temporary = target.with_name('.plugin-api-next')
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    try:
+        with os.fdopen(fd, 'wb') as output:
+            output.write(source.read_bytes())
+            output.flush()
+            os.fsync(output.fileno())
+        if digest(temporary) != desired[name]:
+            raise RuntimeError('Staged router digest mismatch')
+        # inventory refuses unknown files, so compare installed code before the
+        # temporary is created, then pin the target immediately before rename.
+        if digest(target) != expected[name]:
+            raise RuntimeError('Installed router changed during staging')
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    verify_plugin({'plugin_manifest': desired})
+    print(json.dumps({'router_sha256': desired[name], 'runtime_activation': 'not_performed',
+                      'static_entry_unchanged': True, 'reversed': reverse}))
+
+
+def stage_plugin():
+    reconcile_plugin()
+
+
+def rollback_plugin():
+    reconcile_plugin(reverse=True)
+
+
 def publish():
     plan = checked_plan()
     source = HOME / 'artifact'
@@ -154,9 +202,10 @@ def rollback():
 
 
 if __name__ == '__main__':
-    actions = {'publish': publish, 'rollback': rollback}
+    actions = {'publish': publish, 'rollback': rollback,
+               'stage-plugin': stage_plugin, 'rollback-plugin': rollback_plugin}
     if len(sys.argv) != 2 or sys.argv[1] not in actions:
-        raise SystemExit('Usage: publish.py publish|rollback')
+        raise SystemExit('Usage: publish.py publish|rollback|stage-plugin|rollback-plugin')
     import fcntl
     checked_plan()
     SITE_ROOT.parent.mkdir(parents=True, exist_ok=True)

@@ -216,6 +216,73 @@ async function openSession(page: Page) {
   await expect(page.getByRole('status').filter({ hasText: '正在恢复对话' })).toHaveCount(0)
 }
 
+test('phone security binds the original task, masks sudo and keeps short-screen controls reachable', async ({
+  page
+}, info) => {
+  const backend = await fixture(page)
+  await page.setViewportSize({ width: 360, height: 440 })
+  const answers: unknown[] = []
+  const taskKey = 'fixture-held'
+  await page.route('**/api/plugins/neo-mobile-web/security/sessions?*', route =>
+    route.fulfill({
+      json: { sessions: [{ session_key: taskKey, title: '夹具任务 · 跨后端安全请求'.repeat(5) }] }
+    })
+  )
+  await page.routeWebSocket('**/api/plugins/neo-mobile-web/security/ws?*', ws => {
+    ws.onMessage(raw => {
+      const message = JSON.parse(String(raw))
+
+      if (message.session_key === taskKey) {
+        ws.send(
+          JSON.stringify({
+            type: 'snapshot',
+            generation: 'fixture-generation',
+            backend: 'Fixture Host / Desktop / 17:12.5',
+            profile: 'default',
+            session_key: taskKey,
+            runtime_id: 'fixture-live',
+            requests: [
+              {
+                id: 'fixture-sudo',
+                method: 'sudo',
+                params: { session_id: 'fixture-live', command: 'sudo fixture-' + 'command'.repeat(24) }
+              }
+            ]
+          })
+        )
+      } else {
+        answers.push(message)
+        ws.send(JSON.stringify({ type: 'answer', id: message.id, status: 'ok' }))
+      }
+    })
+  })
+  await page.goto('/mobile/')
+  const draft = page.getByRole('textbox', { name: '消息', exact: true })
+  await draft.fill('保留原草稿')
+  await page.getByRole('button', { name: '安全请求', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '安全请求', exact: true })
+  await page.getByRole('button', { name: /夹具任务 · 跨后端安全请求/ }).click()
+  const input = page.getByLabel('sudo 密码', { exact: true })
+  await expect(input).toHaveAttribute('type', 'password')
+  expect(await dialog.evaluate(e => e.scrollWidth <= e.clientWidth + 1)).toBe(true)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+  await input.scrollIntoViewIfNeeded()
+  expect(await input.evaluate(e => parseFloat(getComputedStyle(e).fontSize))).toBeGreaterThanOrEqual(16)
+  expect((await input.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+  await page.screenshot({ path: info.outputPath('security-empty-field.png') })
+  await input.fill('fixture-password-value')
+  await page.getByRole('button', { name: '提交 sudo 密码', exact: true }).click()
+  await expect(page.getByText('原后端已接收；命令结果请查看任务。')).toBeVisible()
+  expect(answers).toEqual([
+    { generation: 'fixture-generation', id: 'fixture-sudo', result: { value: 'fixture-password-value' } }
+  ])
+  expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain('fixture-password-value')
+  await page.getByRole('button', { name: '关闭安全请求', exact: true }).click()
+  await expect(draft).toHaveValue('保留原草稿')
+  expect(backend.submits()).toBe(0)
+  expect(backend.modelChanges()).toEqual([])
+})
+
 test('selects a session model on desktop and touch layouts without sending or losing photos', async ({
   page
 }, info) => {
@@ -851,7 +918,7 @@ test('official Desktop theme and locale matrix keeps the original backdrop and b
     path: `mobile/test-results/matrix-${info.project.name}-ar.png`,
     fullPage: true
   })
-  await page.locator('.chat-header [aria-haspopup="dialog"]').click()
+  await page.getByRole('button', { name: 'Appearance settings', exact: true }).click()
   await page.locator('#mobile-language').selectOption('en')
   await page.locator('[data-appearance-tab="text"]').click()
   await page.locator('#mobile-font').click()

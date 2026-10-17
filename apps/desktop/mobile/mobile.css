@@ -1268,6 +1268,81 @@ body {
   }
 }
 
+.security-description {
+  padding: 0 16px 12px;
+  flex-shrink: 0;
+}
+.security-body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0 16px 16px;
+}
+.security-watch,
+.security-task-list {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin-top: 12px;
+}
+.security-panel h3,
+.security-identity,
+.security-task-list button {
+  overflow-wrap: anywhere;
+  white-space: normal;
+  min-width: 0;
+}
+.security-task-list button {
+  height: auto;
+  justify-content: flex-start;
+  text-align: start;
+  padding: 10px 12px;
+}
+.security-task-list small {
+  display: block;
+  color: var(--mobile-muted);
+  margin-top: 4px;
+}
+.security-card {
+  margin: 0;
+  width: 100%;
+  min-width: 0;
+  background: var(--mobile-surface);
+}
+.security-card pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+}
+.security-card form,
+.security-card label {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.security-card input[type='password'] {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  font-size: max(16px, 0.875rem);
+  padding: 8px 12px;
+  border: 1px solid var(--mobile-border);
+  border-radius: 10px;
+  background: var(--mobile-elevated);
+  color: var(--mobile-ink);
+}
+.security-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.security-actions button {
+  white-space: normal;
+  height: auto;
+  overflow-wrap: anywhere;
+}
+
 /* Desktop type hierarchy, not an Electron/browser window-zoom emulation. */
 :root {
   font-size: calc(var(--dt-base-size, 1rem) * var(--web-ui-text-scale, 1));

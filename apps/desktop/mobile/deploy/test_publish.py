@@ -104,6 +104,52 @@ class PersistentPublish(unittest.TestCase):
             module.rollback()
         self.assertTrue((self.target / 'current').is_symlink())
 
+    def prepare_router_update(self):
+        import shutil
+        module.publish()
+        shutil.copytree(self.home / 'plugin', self.home / 'plugin-previous')
+        self.plan.update(previous_release=self.plan['release'], previous_manifest=self.plan['manifest'],
+                         previous_plugin_manifest=self.plan['plugin_manifest'])
+        (self.home / 'plugin/dashboard/plugin_api.py').write_text('# fixture updated router')
+        self.plan['plugin_manifest'] = module.inventory(self.home / 'plugin')
+        self.save_plan()
+
+    def test_router_reconciliation_is_pinned_reversible_and_does_not_switch_static(self):
+        self.prepare_router_update()
+        before = os.readlink(self.target / 'current')
+        module.stage_plugin()
+        self.assertEqual((self.target / 'dashboard/plugin_api.py').read_text(), '# fixture updated router')
+        self.assertEqual(os.readlink(self.target / 'current'), before)
+        with self.assertRaises(RuntimeError):
+            module.stage_plugin()  # unknown/repeated transition is not silently accepted
+        module.rollback_plugin()
+        self.assertEqual((self.target / 'dashboard/plugin_api.py').read_text(), '# fixture router')
+        self.assertEqual(os.readlink(self.target / 'current'), before)
+        self.assertEqual((self.official / 'index.html').read_text(), 'official dashboard')
+
+    def assert_router_drift_refused(self, change):
+        self.prepare_router_update()
+        if change == 'source':
+            (self.home / 'plugin/dashboard/plugin_api.py').write_text('# changed candidate')
+        if change == 'target':
+            (self.target / 'dashboard/plugin_api.py').write_text('# changed live code')
+        if change == 'entry':
+            (self.target / 'current').unlink()
+            (self.target / 'current').symlink_to(self.official)
+        before = (self.target / 'dashboard/plugin_api.py').read_bytes()
+        with self.assertRaises(RuntimeError):
+            module.stage_plugin()
+        self.assertEqual((self.target / 'dashboard/plugin_api.py').read_bytes(), before)
+
+    def test_router_reconciliation_refuses_source_drift(self):
+        self.assert_router_drift_refused('source')
+
+    def test_router_reconciliation_refuses_target_drift(self):
+        self.assert_router_drift_refused('target')
+
+    def test_router_reconciliation_refuses_entry_drift(self):
+        self.assert_router_drift_refused('entry')
+
 
 if __name__ == '__main__':
     unittest.main()

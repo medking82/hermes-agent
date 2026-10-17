@@ -14,6 +14,15 @@ it('uses same-origin cookie auth and obtains a fresh ticket for each socket', as
   expect(await api.socketUrl()).toBe('wss://hermes.example/api/ws?ticket=second')
   expect(fetcher.mock.calls[0][1]).toMatchObject({ method: 'POST', credentials: 'same-origin', cache: 'no-store' })
 })
+it('mints a fresh same-origin ticket for the fixed security endpoint only', async () => {
+  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ticket: 'fixture-security-ticket' })))
+  vi.stubGlobal('fetch', fetcher)
+  const api = new BrowserApi('https://hermes.example')
+  expect(await api.socketUrl('/api/plugins/neo-mobile-web/security/ws')).toBe(
+    'wss://hermes.example/api/plugins/neo-mobile-web/security/ws?ticket=fixture-security-ticket'
+  )
+  await expect(api.socketUrl('https://foreign.invalid/api/ws' as never)).rejects.toThrow()
+})
 it('fails closed on expired auth, without redirecting to an external login', async () => {
   vi.stubGlobal(
     'fetch',
